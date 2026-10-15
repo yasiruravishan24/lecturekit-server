@@ -1,0 +1,9 @@
+# Server dependencies (SERVER_PLAN.md section 3). The lecturekit package needs its own
+# requirements too: see ../lecturekit/requirements.txt (installed first, see README.md).
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+sqlalchemy>=2.0       # database layer (SQLite)
+bcrypt>=4.0           # password hashing
+pyjwt>=2.8            # login tokens
+httpx>=0.27           # FastAPI TestClient (tests only)

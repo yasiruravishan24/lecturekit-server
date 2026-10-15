@@ -1,0 +1,11 @@
+# {$DOMAIN} comes from the environment. Caddy gets and renews the HTTPS certificate by itself.
+{$DOMAIN} {
+	encode gzip
+
+	# must be larger than MAX_RECORDING_MB in .env (default 1500)
+	request_body {
+		max_size 1600MB
+	}
+
+	reverse_proxy app:8000
+}

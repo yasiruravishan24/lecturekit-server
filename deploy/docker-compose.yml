@@ -1,0 +1,36 @@
+# Run from this folder:  docker compose up -d --build
+# Two services: the app (not exposed to the internet) and Caddy (ports 80/443, automatic HTTPS).
+services:
+  app:
+    build:
+      context: ../..                       # the folder holding lecturekit/ and server/
+      dockerfile: server/deploy/Dockerfile
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    volumes:
+      - ./data:/data                       # database, uploads, results, cache, logs: back this folder up
+      # once the web app is built (step 7), uncomment this line: the server then serves it at "/"
+      # - ../../web/dist:/app/web/dist:ro
+    restart: unless-stopped
+    expose:
+      - "8000"
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:?set DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:

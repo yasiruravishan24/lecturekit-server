@@ -1,0 +1,9 @@
+# The build context is the whole project folder (lecturekit/ and server/ side by side).
+# Allow-list: send only what the Dockerfile copies, never lecture media, data, logs, keys or virtual environments.
+*
+!lecturekit/requirements.txt
+!lecturekit/lecturekit
+!server/requirements.txt
+!server/server
+**/__pycache__
+**/*.pyc
