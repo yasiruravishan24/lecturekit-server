@@ -43,6 +43,8 @@ def job_error(code: str, message: str) -> tuple[str, str]:
     if code == "validation":
         return code, message
     if code == "external_tool":
+        if "libreoffice is needed" in low:                # the server was built without LibreOffice (WITH_LIBREOFFICE=0)
+            return code, "This server cannot read PowerPoint or Word files; please upload the slides as a PDF"
         if "libreoffice" in low or "convert" in low or "merge" in low:
             return code, "Slides could not be converted"
         if "ffmpeg" in low or "ffprobe" in low or "audio" in low:

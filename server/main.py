@@ -42,7 +42,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield
         worker.stop()
 
-    app = FastAPI(title="lecturekit server", lifespan=lifespan)
+    # the interactive API docs live under the API prefix too, so a reverse proxy only has to forward /api/*
+    prefix = settings.api_prefix
+    app = FastAPI(title="lecturekit server", lifespan=lifespan, redoc_url=None,
+                  docs_url=f"{prefix}/docs" if prefix else "/docs",
+                  openapi_url=f"{prefix}/openapi.json" if prefix else "/openapi.json")
     app.state.settings, app.state.session_factory, app.state.worker = settings, session_factory, worker
     app.state.login_guard = LoginGuard(settings.login_max_failures, settings.login_window_seconds)
     errors.register(app)
@@ -64,7 +68,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     getattr(request.state, "user_id", "-"))            # no bodies, no tokens
         return response
 
-    prefix = settings.api_prefix
     for module in (auth, courses, uploads, live, results, health):
         app.include_router(module.router, prefix=prefix)
     if prefix:
@@ -72,6 +75,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     if settings.web_dist and settings.web_dist.is_dir():  # the web app, built to static files (served last)
         app.mount("/", StaticFiles(directory=settings.web_dist, html=True), name="web")
+    else:                                                 # no web app yet: say what this is instead of a bare 404
+        @app.get("/", include_in_schema=False)
+        def root():
+            return {"name": "lecturekit server", "api": prefix, "docs": f"{prefix}/docs", "health": "/health",
+                    "web_app": "not installed"}
     return app
 
 

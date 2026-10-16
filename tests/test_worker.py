@@ -64,6 +64,8 @@ def test_progress_is_written_to_the_job_row(client, fake_lk):
     (ValidationError("Configuration C needs slides"), "validation", "Configuration C needs slides"),
     (ExternalToolError("ffmpeg could not read media.mp4: moov atom not found"), "external_tool", "ffmpeg could not read this file"),
     (ExternalToolError("LibreOffice could not convert deck.pptx: boom"), "external_tool", "Slides could not be converted"),
+    (ExternalToolError("LibreOffice is needed to read PowerPoint/Word files (brew install --cask libreoffice), or export the slides to PDF yourself"),
+     "external_tool", "This server cannot read PowerPoint or Word files; please upload the slides as a PDF"),
     (LLMError("Claude API call 'notes' failed: RateLimitError: sk-ant-secret"), "llm", "The AI service failed, try again later"),
 ])
 def test_lecturekit_errors_become_failed_jobs_with_a_safe_message(client, fake_lk, error, code, message):

@@ -44,7 +44,7 @@ cd lecturekit-server
 PYTHONPATH=../lecturekit .venv/bin/python scripts/smoke.py --invite dev-invite --recording talk.mp4 --live --end 600
 ```
 
-Interactive API docs: `http://localhost:8000/docs`.
+Interactive API docs: `http://localhost:8000/api/docs`.
 
 ## Settings (environment variables)
 
