@@ -27,9 +27,10 @@ def main() -> int:
     ap.add_argument("--live", action="store_true", help="send 5-minute chunks instead of one file")
     ap.add_argument("--end", type=float, default=None, help="live mode: use only the first END seconds")
     ap.add_argument("--keep", action="store_true", help="do not delete the session at the end")
+    ap.add_argument("--insecure", action="store_true", help="accept a self-signed certificate (a test on localhost)")
     a = ap.parse_args()
 
-    c = httpx.Client(base_url=a.url.rstrip("/") + "/api", timeout=600)
+    c = httpx.Client(base_url=a.url.rstrip("/") + "/api", timeout=600, verify=not a.insecure)
     r = c.post("/auth/register", json={"email": a.email, "password": a.password, "invite_code": a.invite})
     print("register:", r.status_code, "(409 = already registered)" if r.status_code == 409 else "")
     r = c.post("/auth/login", json={"email": a.email, "password": a.password})
