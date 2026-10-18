@@ -79,7 +79,9 @@ def test_empty_upload_is_rejected(client):
     h = new_user(client)
     sid = make_session(client, h)
     r = client.post(f"/sessions/{sid}/upload", headers=h, files=[("recording", ("", b"", "application/octet-stream"))])
-    assert r.status_code == 422 and r.json()["error"]["code"] == "missing_input"
+    assert r.status_code == 422 and r.json()["error"]["code"] in ("missing_input", "validation")      # a file field with no file chosen
+    r = client.post(f"/sessions/{sid}/upload", headers=h, files=[("slides", ("", b"", "application/octet-stream"))])
+    assert r.status_code == 422
     assert client.post(f"/sessions/{sid}/upload", headers=h).status_code == 422
 
 

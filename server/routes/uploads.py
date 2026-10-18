@@ -8,8 +8,9 @@ from lecturekit.slidefiles import SLIDE_TYPES      # a constant only: the types 
 from .. import storage
 from ..access import own_session
 from ..db import get_db
-from ..errors import conflict, unprocessable
+from ..errors import ApiError, conflict, unprocessable
 from ..jobs import active, enqueue
+from ..media import JOINED_NAME
 from ..models import LectureSession, MediaFile, User
 from ..validation import Id
 from ..security import current_user
@@ -18,18 +19,23 @@ from ..serialize import session_out
 router = APIRouter(tags=["uploads"])
 
 
-def stage_files(request: Request, sdir, recording: UploadFile | None, slides: list[UploadFile]):
+def stage_files(request: Request, sdir, recordings: list[UploadFile], slides: list[UploadFile]):
     """Save uploads to temporary names first, so a bad file in the middle leaves nothing behind.
 
     Returns (staged, commit): staged is [(kind, original_name, tmp_path, final_ext, size)]."""
     settings = request.app.state.settings
     staged, updir = [], storage.upload_dir(sdir)
     try:
-        if recording is not None and recording.filename:
+        parts = [r for r in recordings if r.filename]
+        if len(parts) > settings.max_recording_parts:
+            raise unprocessable(f"A lecture can have at most {settings.max_recording_parts} recording files")
+        for n, recording in enumerate(parts, 1):
             ext = storage.check_extension(recording.filename, lk.MEDIA_TYPES, "recording")
-            tmp = updir / ".recording.part"
+            tmp = updir / f".recording_{n:02d}.part"
             size = storage.save_upload(recording, tmp, settings.max_recording_mb)
             staged.append(("recording", recording.filename, tmp, ext, size))
+            if sum(s[4] for s in staged if s[0] == "recording") > settings.max_recording_mb * 1024 * 1024:
+                raise ApiError(413, "too_large", f"The recordings together are too large (limit {settings.max_recording_mb} MB)")
         for n, slide in enumerate([s for s in slides if s.filename], 1):
             ext = storage.check_extension(slide.filename, SLIDE_TYPES, "slides")
             tmp = updir / f".slide_{n:02d}.part"
@@ -48,12 +54,16 @@ def commit_files(db: Session, session: LectureSession, sdir, staged, live: bool 
     live=True (slides sent when finishing a live recording): keep the chunks and the state as they are."""
     updir = storage.upload_dir(sdir)
     slide_no = sum(1 for f in session.files if f.kind == "slides")
+    part_no = 0
+    if any(s[0] == "recording" for s in staged):                  # new recordings replace all the old ones
+        for old in [f for f in session.files if f.kind == "recording"]:
+            storage.remove_file(updir / old.stored_name)
+            session.files.remove(old)
+        storage.remove_file(updir / JOINED_NAME)
     for kind, original, tmp, ext, size in staged:
         if kind == "recording":
-            for old in [f for f in session.files if f.kind == "recording"]:
-                storage.remove_file(updir / old.stored_name)
-                session.files.remove(old)
-            stored = f"recording{ext}"
+            part_no += 1
+            stored = f"recording{ext}" if part_no == 1 else f"recording_{part_no:02d}{ext}"
         else:
             slide_no += 1
             stored = f"slide_{slide_no:02d}{ext}"
@@ -66,7 +76,7 @@ def commit_files(db: Session, session: LectureSession, sdir, staged, live: bool 
 
 
 @router.post("/sessions/{session_id}/upload")
-def upload(session_id: Id, request: Request, recording: UploadFile | None = File(None),
+def upload(session_id: Id, request: Request, recording: list[UploadFile] = File(default=[]),
            slides: list[UploadFile] = File(default=[]), user: User = Depends(current_user),
            db: Session = Depends(get_db)):
     session = own_session(db, user, session_id)

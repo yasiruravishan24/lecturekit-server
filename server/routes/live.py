@@ -101,7 +101,7 @@ def finish(session_id: Id, request: Request, total: int = Query(ge=1, le=1000), 
     if missing:
         raise unprocessable(_missing_message(missing), "missing_input")
     sdir = storage.session_dir(request.app.state.settings, user.id, session.id)
-    staged = stage_files(request, sdir, None, slides)
+    staged = stage_files(request, sdir, [], slides)
     commit_files(db, session, sdir, staged, live=True)
     session.live.total = total
     db.commit()

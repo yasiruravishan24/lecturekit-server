@@ -1842,7 +1842,7 @@
                 "upload"
               ]
             },
-            "description": "Uploads the lecture recording and optional slides. A new recording replaces the old one; slides are added in the order sent (several files are joined into one). Anything made from earlier files is discarded.\n\n**Authentication:** Bearer token\n\n**Parameters:** `session_id` in the path\n\n**Body:** multipart form: `recording` (one file: mp4, mov, m4a, mp3, wav, webm, mkv, aac, ogg) and `slides` (any number of files: pdf, pptx, ppt, pps, ppsx, odp, docx, doc, odt, rtf)\n\n**Responses**\n- `200` the session, state `uploaded`\n- `409` `busy` (being processed) or `live_session`\n- `413` `too_large`\n- `422` `validation` (type) or `missing_input` (no files)",
+            "description": "Uploads the lecture recording and optional slides. A lecture saved in several recording files (for example before and after a break) can be sent as several `recording` fields: they are joined in the order sent, even when the formats differ, and processed as one lecture. New recordings replace all earlier ones; slides are added in the order sent (several files are joined into one). Anything made from earlier files is discarded.\n\n**Authentication:** Bearer token\n\n**Parameters:** `session_id` in the path\n\n**Body:** multipart form: `recording` (one or more files, at most 10, together within the size limit: mp4, mov, m4a, mp3, wav, webm, mkv, aac, ogg) and `slides` (any number of files: pdf, pptx, ppt, pps, ppsx, odp, docx, doc, odt, rtf)\n\n**Responses**\n- `200` the session, state `uploaded`\n- `409` `busy` (being processed) or `live_session`\n- `413` `too_large`\n- `422` `validation` (type, empty file or too many parts) or `missing_input` (no files)",
             "body": {
               "mode": "formdata",
               "formdata": [
@@ -1850,7 +1850,7 @@
                   "key": "recording",
                   "type": "file",
                   "src": "sample-recording.m4a",
-                  "description": "audio or video of the lecture"
+                  "description": "audio or video of the lecture; repeat for several parts"
                 },
                 {
                   "key": "slides",

@@ -50,6 +50,8 @@ Interactive API docs: `http://localhost:8000/api/docs`.
 
 ## Settings (environment variables)
 
+A lecture saved in several recording files can be uploaded together (up to `MAX_RECORDING_PARTS`, default 10); the server joins them in the order sent with ffmpeg before processing.
+
 Logs: one file per day in `DATA_DIR/logs`, `server-YYYY-MM-DD.log` (every request line, job events, warnings, errors with tracebacks) and `error-YYYY-MM-DD.log` (errors only); files older than `LOG_RETENTION_DAYS` (default 14) are deleted. Times are UTC in Docker. Passwords, tokens and request bodies are never logged.
 
 See `../.env.example`. `JWT_SECRET` (32+ characters) is required: the server refuses to start without it. Sign-up sends a verification code by email (HTML, see `server/mail_templates.py`) and a welcome email after it is confirmed (`SMTP_*`, `PUBLIC_URL`; without `SMTP_HOST` the email goes to the log) and Google login is on when `GOOGLE_CLIENT_ID` is set.

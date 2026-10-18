@@ -229,12 +229,12 @@ def build():
 })();"""
     processing = group("Processing", [
         request("Upload Files", "POST", "/api/sessions/{{sessionId}}/upload", doc(
-            "Uploads the lecture recording and optional slides. A new recording replaces the old one; slides are added in the order sent (several files are joined into one). Anything made from earlier files is discarded.",
+            "Uploads the lecture recording and optional slides. A lecture saved in several recording files (for example before and after a break) can be sent as several `recording` fields: they are joined in the order sent, even when the formats differ, and processed as one lecture. New recordings replace all earlier ones; slides are added in the order sent (several files are joined into one). Anything made from earlier files is discarded.",
             params="`session_id` in the path",
-            body=f"multipart form: `recording` (one file: {RECORDING}) and `slides` (any number of files: {SLIDES})",
-            responses=[(200, "the session, state `uploaded`"), (409, "`busy` (being processed) or `live_session`"), (413, "`too_large`"), (422, "`validation` (type) or `missing_input` (no files)")]),
+            body=f"multipart form: `recording` (one or more files, at most 10, together within the size limit: {RECORDING}) and `slides` (any number of files: {SLIDES})",
+            responses=[(200, "the session, state `uploaded`"), (409, "`busy` (being processed) or `live_session`"), (413, "`too_large`"), (422, "`validation` (type, empty file or too many parts) or `missing_input` (no files)")]),
             status(200) + '\npm.test("State is uploaded", () => pm.expect(body().state).to.eql("uploaded"));\npm.test("Has the recording and the slides", () => pm.expect(body().files.map(f => f.kind)).to.eql(["recording", "slides"]));',
-            form=[("recording", "sample-recording.m4a", "audio or video of the lecture"), ("slides", "sample-slides.pdf", "optional, repeat for several files")]),
+            form=[("recording", "sample-recording.m4a", "audio or video of the lecture; repeat for several parts"), ("slides", "sample-slides.pdf", "optional, repeat for several files")]),
         request("Process Session", "POST", "/api/sessions/{{sessionId}}/process", doc(
             "Starts turning the recording into notes and a quiz (Whisper, then Claude). It runs in the background, one job at a time; poll Get Job (or Get Session) for progress. In this collection the request also waits until the job has finished.",
             params="`session_id` in the path",

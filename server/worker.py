@@ -16,6 +16,7 @@ from lecturekit.errors import LectureKitError, MissingInputError
 
 from . import storage
 from .errors import job_error
+from .media import JOINED_NAME, join_recordings
 from .models import Attempt, Job, LectureSession, LiveChunk, Note, Question, utcnow
 from .settings import Settings
 
@@ -107,9 +108,9 @@ class Worker:
                 session.state = "processing"
             sdir = storage.session_dir(self.settings, session.user_id, session.id)
             updir = storage.upload_dir(sdir)
-            recording = next((updir / f.stored_name for f in session.files if f.kind == "recording"), None)
+            recordings = [updir / f.stored_name for f in session.files if f.kind == "recording"]
             info = {"job_id": job.id, "kind": job.kind, "arg": job.arg, "session_id": session.id,
-                    "user_id": session.user_id, "title": session.title, "sdir": sdir, "recording": recording,
+                    "user_id": session.user_id, "title": session.title, "sdir": sdir, "recordings": recordings,
                     "slides": [updir / f.stored_name for f in session.files if f.kind == "slides"],
                     "chunk_seconds": session.live.chunk_seconds if session.live else None,
                     "overlap": session.live.overlap if session.live else None}
@@ -122,7 +123,11 @@ class Worker:
         kind, cb = info["kind"], self._progress(info["job_id"])
         slides = info["slides"] or None
         if kind == "process":
-            return lk.process_session(info["recording"], info["sdir"], slides=slides, title=info["title"],
+            recording = info["recordings"][0] if info["recordings"] else None
+            if len(info["recordings"]) > 1:                      # a lecture saved in several files: one recording for the pipeline
+                cb("prepare", 1, "Joining the recordings")
+                recording = join_recordings(info["recordings"], storage.upload_dir(info["sdir"]) / JOINED_NAME)
+            return lk.process_session(recording, info["sdir"], slides=slides, title=info["title"],
                                       final=True, on_progress=cb)
         if kind == "chunk":
             if info["chunk_file"] is None:
@@ -239,6 +244,7 @@ class Worker:
                 for f in [f for f in session.files if f.kind == "recording"]:
                     storage.remove_file(storage.upload_dir(sdir) / f.stored_name)
                     session.files.remove(f)
+                storage.remove_file(storage.upload_dir(sdir) / JOINED_NAME)
                 for chunk in storage.upload_dir(sdir).glob("chunk_*"):
                     chunk.unlink(missing_ok=True)
                 cleaned += bool(before)

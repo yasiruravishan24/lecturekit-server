@@ -19,7 +19,8 @@ class Settings:
     jwt_secret: str
     api_prefix: str = "/api"                 # all routes live under this prefix; "/" serves the web app
     daily_limit: int = 5
-    max_recording_mb: int = 1500
+    max_recording_mb: int = 1500             # one recording file, and also all parts of one lecture together
+    max_recording_parts: int = 10            # recording files in one lecture
     max_chunk_mb: int = 60
     max_slides_mb: int = 100
     keep_media_days: int = 7
@@ -53,6 +54,7 @@ class Settings:
             api_prefix=os.getenv("API_PREFIX", "/api").rstrip("/"),
             daily_limit=_int("DAILY_LIMIT", 5),
             max_recording_mb=_int("MAX_RECORDING_MB", 1500),
+            max_recording_parts=_int("MAX_RECORDING_PARTS", 10),
             max_chunk_mb=_int("MAX_CHUNK_MB", 60),
             max_slides_mb=_int("MAX_SLIDES_MB", 100),
             keep_media_days=_int("KEEP_MEDIA_DAYS", 7),
