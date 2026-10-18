@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from lecturekit import api as lk
 
@@ -23,6 +24,25 @@ from .settings import Settings
 from .worker import Worker
 
 logger = logging.getLogger("lecturekit.server")
+
+
+class SpaFiles(StaticFiles):
+    """The built web app. An address with no file behind it (a page of the app, such as /sessions/12) gets index.html,
+    so the app can use normal addresses without a # in them. Missing files (.js, .png ...) and unknown /api paths stay 404."""
+
+    def __init__(self, *args, api_prefix: str = "", **kwargs):
+        super().__init__(*args, **kwargs)
+        self.api_prefix = api_prefix
+
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as e:
+            is_api = bool(self.api_prefix) and (path == self.api_prefix or path.startswith(self.api_prefix + "/"))
+            is_file = "." in path.rsplit("/", 1)[-1]
+            if e.status_code == 404 and not is_api and not is_file:
+                return await super().get_response("index.html", scope)
+            raise
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -78,7 +98,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.include_router(health.router)                 # /health also at the root, for monitoring and Caddy
 
     if settings.web_dist and settings.web_dist.is_dir():  # the web app, built to static files (served last)
-        app.mount("/", StaticFiles(directory=settings.web_dist, html=True), name="web")
+        app.mount("/", SpaFiles(directory=settings.web_dist, html=True, api_prefix=prefix.strip("/")), name="web")
     else:                                                 # no web app yet: say what this is instead of a bare 404
         @app.get("/", include_in_schema=False)
         def root():

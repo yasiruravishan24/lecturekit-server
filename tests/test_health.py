@@ -50,3 +50,22 @@ def test_the_web_app_is_served_at_root_when_it_exists(tmp_path, fake_lk):
         assert c.get("/").text == "<html>web app</html>"                 # the static app
         assert c.get("/api/health").status_code == 200                    # the API still answers under /api
         assert c.get("/health").status_code == 200
+
+
+def test_the_web_app_is_served_with_normal_addresses(tmp_path):
+    from fastapi.testclient import TestClient
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text("<html>the app</html>")
+    (dist / "assets" / "app.js").write_text("console.log(1)")
+    app = create_app(Settings(data_dir=tmp_path / "data", jwt_secret="s" * 40, preload_whisper=False, web_dist=dist))
+    with TestClient(app) as c:
+        for path in ("/", "/login", "/sessions/12", "/modules/3", "/quiz/5/result"):
+            r = c.get(path)
+            assert r.status_code == 200 and "the app" in r.text, path               # a page of the app: index.html
+        assert c.get("/assets/app.js").text == "console.log(1)"                        # a real file
+        assert c.get("/assets/missing.js").status_code == 404                          # a missing file is not index.html
+        r = c.get("/api/nope")
+        assert r.status_code == 404 and r.json()["error"]["code"] == "not_found"       # the API keeps its JSON 404
+        assert c.get("/api/health").json()["ok"] is not None and c.get("/health").status_code == 200
+        assert c.get("/api/docs").status_code == 200
