@@ -4,7 +4,7 @@ Quiz answers and explanations leave the server only in the answer to a submitted
 import json
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,7 @@ from .. import storage
 from ..access import own_session
 from ..db import get_db
 from ..errors import conflict, not_found, unprocessable
+from ..pdf_export import notes_pdf
 from ..models import Attempt, AttemptAnswer, Job, User, iso
 from ..schemas import AttemptIn
 from ..validation import Id
@@ -94,3 +95,15 @@ def export_markdown(session_id: Id, request: Request, user: User = Depends(curre
     if not path.is_file():
         raise not_found()
     return FileResponse(path, media_type="text/markdown", filename=f"lecture-{session.id}.md")
+
+
+@router.get("/sessions/{session_id}/export.pdf")
+def export_pdf(session_id: Id, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """The notes, short notes and quiz (with answers) as a PDF made on the server."""
+    session = _done_session(db, user, session_id)
+    n = session.note
+    questions = [{"question": q.text, "options": json.loads(q.options_json), "answer_index": q.answer_index, "explanation": q.explanation}
+                 for q in session.questions]
+    meta = f"Lecture notes - {n.created_at:%d %b %Y}"
+    data = notes_pdf(n.title, meta, json.loads(n.full_notes_json), json.loads(n.short_notes_json), questions)
+    return Response(data, media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="lecture-{session.id}.pdf"'})

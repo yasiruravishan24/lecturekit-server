@@ -15,7 +15,7 @@ def done_session(client, h, fake_lk=None):
 def test_notes_and_quiz_exist_only_when_done(client, fake_lk):
     h = new_user(client)
     sid = make_session(client, h)
-    for path in ("notes", "quiz", "quiz/attempts", "export.md"):
+    for path in ("notes", "quiz", "quiz/attempts", "export.md", "export.pdf"):
         assert client.get(f"/sessions/{sid}/{path}", headers=h).status_code == 404, path
     client.post(f"/sessions/{sid}/upload", headers=h, files=[("recording", file_part("a.mp4"))])
     fake_lk.gate.clear()
@@ -100,4 +100,7 @@ def test_export_markdown_and_job_status(client, fake_lk):
     assert r.status_code == 200 and r.text.startswith("# Test lecture")
     assert r.headers["content-type"].startswith("text/markdown")
     assert f"lecture-{sid}.md" in r.headers["content-disposition"]
+    pdf = client.get(f"/sessions/{sid}/export.pdf", headers=h)
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF") and pdf.headers["content-type"] == "application/pdf"
+    assert client.get(f"/sessions/{sid}/export.pdf", headers=other).status_code == 404
     assert client.get("/jobs/424242", headers=h).status_code == 404
