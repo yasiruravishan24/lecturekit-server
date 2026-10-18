@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from .. import storage
 from ..access import own_session
 from ..db import get_db
-from ..errors import not_found, unprocessable
+from ..errors import conflict, not_found, unprocessable
 from ..models import Attempt, AttemptAnswer, Job, User, iso
 from ..schemas import AttemptIn
 from ..validation import Id
@@ -49,7 +49,7 @@ def get_quiz(session_id: Id, user: User = Depends(current_user), db: Session = D
     """Questions and options only: no answer index, no explanation."""
     session = _done_session(db, user, session_id)
     return {"questions": [{"id": q.id, "position": q.position, "question": q.text,
-                           "options": json.loads(q.options_json), "bloom_level": q.bloom_level}
+                           "options": json.loads(q.options_json), "bloom_level": q.bloom_level, "source": q.source}
                           for q in session.questions]}
 
 
@@ -57,6 +57,9 @@ def get_quiz(session_id: Id, user: User = Depends(current_user), db: Session = D
 def submit_attempt(session_id: Id, body: AttemptIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     session = _done_session(db, user, session_id)
     questions = list(session.questions)
+    old_size = sum(1 for q in questions if q.source != "board")
+    if len(body.answers) == old_size < len(questions):          # the page was opened before questions about the board were added
+        raise conflict(f"Questions about the board were added to this quiz while you were answering ({len(questions) - old_size} new). Reload the quiz to answer them too", "quiz_changed")
     if len(body.answers) != len(questions):
         raise unprocessable(f"Send one answer for each of the {len(questions)} questions (null to skip one)")
     results, rows, score = [], [], 0

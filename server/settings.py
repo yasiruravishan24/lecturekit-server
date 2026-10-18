@@ -37,6 +37,7 @@ class Settings:
     visuals_enabled: bool = True             # background work after the notes: board and screen pictures, replay with blurred faces
     max_storage_gb: int = 10                 # per user: recordings kept for replay, slides, screenshots
     media_link_minutes: int = 120            # how long a signed link to a replay or screenshot works
+    visual_questions: int = 3                # extra quiz questions about the board and screen (0 = none)
     web_dist: Path | None = None
     smtp_host: str = ""                      # empty: emails are written to the server log instead of sent
     smtp_port: int = 587
@@ -67,6 +68,7 @@ class Settings:
             visuals_enabled=os.getenv("VISUALS_ENABLED", "1") != "0",
             max_storage_gb=_int("MAX_STORAGE_GB", 10),
             media_link_minutes=_int("MEDIA_LINK_MINUTES", 120),
+            visual_questions=_int("VISUAL_QUESTIONS", 3),
             web_dist=Path(web_dist) if web_dist else None,
             smtp_host=os.getenv("SMTP_HOST", ""),
             smtp_port=_int("SMTP_PORT", 587),

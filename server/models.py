@@ -175,6 +175,7 @@ class Question(Base):
     answer_index: Mapped[int] = mapped_column(Integer)                 # never sent before an attempt is submitted
     bloom_level: Mapped[str] = mapped_column(String(16), default="")
     explanation: Mapped[str] = mapped_column(Text, default="")         # never sent before an attempt is submitted
+    source: Mapped[str] = mapped_column(String(8), default="lecture")  # lecture (speech, slides) | board (added later from the pictures)
 
 
 class Attempt(Base):

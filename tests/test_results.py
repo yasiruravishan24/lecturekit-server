@@ -34,7 +34,7 @@ def test_quiz_hides_the_answers(client, fake_lk):
     r = client.get(f"/sessions/{sid}/quiz", headers=h)
     qs = r.json()["questions"]
     assert len(qs) == 3 and [q["position"] for q in qs] == [1, 2, 3]
-    assert set(qs[0]) == {"id", "position", "question", "options", "bloom_level"}
+    assert set(qs[0]) == {"id", "position", "question", "options", "bloom_level", "source"}
     for word in ("answer", "explanation", "Because", "correct"):
         assert word not in r.text, word
 

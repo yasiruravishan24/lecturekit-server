@@ -49,7 +49,9 @@ def test_after_the_notes_the_pictures_then_the_replay_are_made(vclient, fake_lk)
     assert s["state"] == "done" and s["replay_state"] == "ready" and s["visuals_state"] == "done" and s["shot_count"] == 2
     notes = vclient.get(f"/sessions/{sid}/notes", headers=h).json()
     assert [t["heading"] for t in notes["full_notes"]][-1] == "From the board"           # the board content is in the notes now
-    assert len(vclient.get(f"/sessions/{sid}/quiz", headers=h).json()["questions"]) == 3   # the quiz is untouched
+    quiz = vclient.get(f"/sessions/{sid}/quiz", headers=h).json()["questions"]
+    assert [(q["position"], q["source"]) for q in quiz] == [(1, "lecture"), (2, "lecture"), (3, "lecture"), (4, "board"), (5, "board")]   # the old ones first, then the board ones
+    assert "answer_index" not in str(quiz) and "explanation" not in str(quiz)                   # the new questions hide their answers too
     shots = vclient.get(f"/sessions/{sid}/shots", headers=h).json()
     assert [(x["t"], x["kind"], x["text"]) for x in shots] == [(12.0, "board", "F = m a"), (95.5, "slide", "Loops")]
     image = vclient.get(shots[0]["url"].removeprefix("/api"))
@@ -289,3 +291,58 @@ def test_an_account_can_be_deleted_while_its_background_work_is_still_running(vc
     time.sleep(0.3)                                                                 # the stuck job ends quietly
     sdir = vclient.app_.state.settings.users_dir / "1"
     assert not (sdir / "sessions" / str(sid) / "replay").exists()
+
+
+def test_board_questions_are_added_once_and_old_attempts_stay_valid(vclient, fake_lk):
+    h = new_user(vclient)
+    sid = make_session(vclient, h)
+    vclient.post(f"/sessions/{sid}/upload", headers=h, files=[("recording", file_part("a.mp4", b"video"))])
+    fake_lk.bg.gate.clear()                                                        # hold the extras: the lecture is done, the quiz has 3 questions
+    wait_job(vclient, h, vclient.post(f"/sessions/{sid}/process", headers=h).json()["job_id"])
+    time.sleep(0.2)
+    old = vclient.get(f"/sessions/{sid}/quiz", headers=h).json()["questions"]
+    assert len(old) == 3
+    first = vclient.post(f"/sessions/{sid}/quiz/attempts", headers=h, json={"answers": [0, 1, 2]}).json()
+    assert first["total"] == 3                                                     # an attempt made before the extra questions exist
+    fake_lk.bg.gate.set()
+    wait_bg(vclient, h, sid)
+    attempts = vclient.get(f"/sessions/{sid}/quiz/attempts", headers=h).json()
+    assert [(a["score"], a["total"]) for a in attempts] == [(first["score"], 3)]    # still 3, not 5
+    assert len(vclient.get(f"/sessions/{sid}/quiz", headers=h).json()["questions"]) == 5
+    r = vclient.post(f"/sessions/{sid}/quiz/attempts", headers=h, json={"answers": [0, 1, 2]})   # a page opened before the extras were added
+    assert r.status_code == 409 and r.json()["error"]["code"] == "quiz_changed" and "Reload" in r.json()["error"]["message"]
+    ok = vclient.post(f"/sessions/{sid}/quiz/attempts", headers=h, json={"answers": [0, 1, 2, 3, None]})
+    assert ok.status_code == 201 and ok.json()["total"] == 5 and ok.json()["results"][4]["explanation"]
+    assert vclient.post(f"/sessions/{sid}/quiz/attempts", headers=h, json={"answers": [0, 1]}).status_code == 422     # other wrong sizes stay a plain 422
+    boards = [c for c in fake_lk.calls if c[0] == "board_quiz"]
+    assert len(boards) == 1 and len(boards[0][2]) == 3                              # asked once, and told the 3 questions that existed
+
+
+def test_a_retry_puts_the_board_content_back_without_reading_the_pictures_again(vclient, fake_lk):
+    h = new_user(vclient)
+    sid = process(vclient, h)
+    wait_bg(vclient, h, sid)
+    reads = fake_lk.calls.count(("visuals", "recording.mp4"))
+    job = wait_job(vclient, h, vclient.post(f"/sessions/{sid}/process", headers=h).json()["job_id"])    # the original is gone: the replay is used
+    assert job["state"] == "done"
+    end = time.time() + 5
+    while time.time() < end:
+        s = vclient.get(f"/sessions/{sid}", headers=h).json()
+        if s["visuals_state"] == "done" and s["replay_state"] == "ready" and len(vclient.get(f"/sessions/{sid}/quiz", headers=h).json()["questions"]) == 5:
+            break
+        time.sleep(0.05)
+    notes = vclient.get(f"/sessions/{sid}/notes", headers=h).json()
+    assert [t["heading"] for t in notes["full_notes"]][-1] == "From the board"                           # ... and get it back
+    assert fake_lk.calls.count(("visuals", "recording.mp4")) == reads and ("visuals", "replay.mp4") not in fake_lk.calls   # nothing was read again
+    assert fake_lk.calls.count(("replay", "replay.mp4")) == 0                                              # and the replay was not made again
+    assert vclient.get(f"/sessions/{sid}", headers=h).json()["replay_state"] == "ready"
+
+
+def test_no_board_questions_when_switched_off_or_nothing_was_seen(tmp_path, fake_lk):
+    app = create_app(make_settings(tmp_path, visuals_enabled=True, visual_questions=0))
+    with TestClient(app, base_url="http://testserver/api") as c:
+        h = new_user(c)
+        sid = process(c, h)
+        wait_bg(c, h, sid)
+        assert len(c.get(f"/sessions/{sid}/quiz", headers=h).json()["questions"]) == 3
+        assert not [x for x in fake_lk.calls if x[0] == "board_quiz"]

@@ -2282,7 +2282,7 @@
                 "quiz"
               ]
             },
-            "description": "The quiz questions. The correct answers and explanations are not included: they are returned only after an attempt is submitted.\n\n**Authentication:** Bearer token\n\n**Parameters:** `session_id` in the path\n\n**Responses**\n- `200` `{questions: [{id, position, question, options, bloom_level}]}`\n- `404` lecture not done"
+            "description": "The quiz questions. The correct answers and explanations are not included: they are returned only after an attempt is submitted.\n\n**Authentication:** Bearer token\n\n**Parameters:** `session_id` in the path\n\n**Responses**\n- `200` `{questions: [{id, position, question, options, bloom_level, source}]}`; `source` is `lecture`, or `board` for the extra questions added later from the board and screen content\n- `404` lecture not done"
           },
           "event": [
             {
@@ -2348,7 +2348,7 @@
                 "attempts"
               ]
             },
-            "description": "Scores an attempt and returns the correct answers and explanations. Every attempt is kept.\n\n**Authentication:** Bearer token\n\n**Parameters:** `session_id` in the path\n\n**Body:** `answers`: one entry per question, in order: the index (0 to 3) of the chosen option, or `null` to skip\n\n**Responses**\n- `201` `{attempt_id, score, total, results: [{question_id, position, chosen_index, correct_index, correct, explanation}]}`\n- `404` lecture not done\n- `422` `validation`: wrong number of answers or an option out of range",
+            "description": "Scores an attempt and returns the correct answers and explanations. Every attempt is kept.\n\n**Authentication:** Bearer token\n\n**Parameters:** `session_id` in the path\n\n**Body:** `answers`: one entry per question, in order: the index (0 to 3) of the chosen option, or `null` to skip\n\n**Responses**\n- `201` `{attempt_id, score, total, results: [{question_id, position, chosen_index, correct_index, correct, explanation}]}`\n- `404` lecture not done\n- `409` `quiz_changed`: questions about the board were added after the quiz was loaded; fetch it again\n- `422` `validation`: wrong number of answers or an option out of range",
             "body": {
               "mode": "raw",
               "raw": "{\n  \"answers\": [\n    0,\n    1,\n    2,\n    3,\n    0,\n    1,\n    2,\n    3,\n    0,\n    null\n  ]\n}",

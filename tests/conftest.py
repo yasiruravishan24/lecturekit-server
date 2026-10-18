@@ -139,12 +139,18 @@ class FakeBackground:
         shots.mkdir(parents=True, exist_ok=True)
         for s in self.shots:
             (shots / s["file"]).write_bytes(b"\xff\xd8fakejpeg" + s["file"].encode())
+        (Path(out_dir) / "visuals.json").write_text(json.dumps({"shots": list(self.shots)}))      # the real stage leaves this file behind
         return {"shots": list(self.shots)}
 
     def refine_notes_with_visuals(self, out_dir, notes, final=True, llm=None, config_name=None):
         self.owner.calls.append(("refine", config_name))
         return {"title": notes["title"], "full_notes": notes["full_notes"] + [{"heading": "From the board", "summary": "F = m a", "key_points": ["force"]}],
                 "short_notes": notes["short_notes"]}
+
+    def add_visual_questions(self, out_dir, quiz, n=3, final=True, llm=None, config_name=None):
+        self.owner.calls.append(("board_quiz", n, [q["question"] for q in quiz]))
+        return [{"question": f"What does the board say, part {i}?", "options": ["a", "b", "c", "d"], "answer_index": i % 4,
+                 "bloom_level": "apply", "explanation": f"Because {i}.", "source": "board"} for i in range(1, min(n, 2) + 1)]
 
     def make_replay(self, src, dst_dir, name="replay", on_progress=None):
         self.owner.calls.append(("replay", Path(src).name))
@@ -169,6 +175,7 @@ def fake_lk(monkeypatch):
     fake.bg = FakeBackground(fake)
     monkeypatch.setattr(lk, "extract_visuals", fake.bg.extract_visuals)
     monkeypatch.setattr(lk, "refine_notes_with_visuals", fake.bg.refine_notes_with_visuals)
+    monkeypatch.setattr(lk, "add_visual_questions", fake.bg.add_visual_questions)
     monkeypatch.setattr(lk, "make_replay", fake.bg.make_replay)
     return fake
 

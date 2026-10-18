@@ -39,6 +39,7 @@ def _add_new_user_columns(engine) -> None:
     _add_missing_columns(engine, "session", {"visuals_state": "VARCHAR(10) NOT NULL DEFAULT 'none'", "replay_state": "VARCHAR(10) NOT NULL DEFAULT 'none'",
                                              "replay_kind": "VARCHAR(5)", "replay_bytes": "INTEGER NOT NULL DEFAULT 0", "shot_count": "INTEGER NOT NULL DEFAULT 0"})
     _add_missing_columns(engine, "media_file", {"removed": "BOOLEAN NOT NULL DEFAULT 0"})
+    _add_missing_columns(engine, "question", {"source": "VARCHAR(8) NOT NULL DEFAULT 'lecture'"})
     columns = {c["name"] for c in inspect(engine).get_columns("user")}
     added = {"full_name": "VARCHAR(120) NOT NULL DEFAULT ''", "email_verified": "BOOLEAN NOT NULL DEFAULT 0",
              "google_sub": "VARCHAR(64)", "terms_accepted_at": "DATETIME",

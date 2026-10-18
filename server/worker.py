@@ -135,12 +135,14 @@ class Worker:
             if not recordings and (replay := storage.find_replay(sdir)) is not None:
                 recordings = [replay]                                # the original is gone: the replay has the same sound
             note = db.scalar(select(Note).where(Note.session_id == session.id))
+            questions = [{"question": q.text, "source": q.source} for q in session.questions]
             info = {"job_id": job.id, "kind": job.kind, "arg": job.arg, "session_id": session.id,
                     "user_id": session.user_id, "title": session.title, "sdir": sdir, "recordings": recordings,
                     "slides": [updir / f.stored_name for f in session.files if f.kind == "slides"],
                     "chunk_seconds": session.live.chunk_seconds if session.live else None,
                     "overlap": session.live.overlap if session.live else None,
-                    "config": session.config, "source": session.source,
+                    "config": session.config, "source": session.source, "questions": questions,
+                    "originals_gone": not any(f.kind == "recording" and not f.removed for f in session.files),
                     "notes": ({"title": note.title, "full_notes": json.loads(note.full_notes_json),
                                "short_notes": json.loads(note.short_notes_json)} if note is not None else None)}
             if job.kind == "chunk":
@@ -177,12 +179,19 @@ class Worker:
             video = recordings[0]
             if len(recordings) != 1 or video.suffix.lower() in AUDIO_TYPES:
                 return {"shots": [], "notes": None}              # no picture to look at
-            found = lk.extract_visuals(video, sdir, final=True, on_progress=lambda stage, pct: cb(stage, pct, ""))
-            merged = None
+            vfile = sdir / "visuals.json"
+            if info["originals_gone"] and vfile.exists():            # a retry after the replay was made: use the pictures read before
+                found = {"shots": json.loads(vfile.read_text()).get("shots", [])}
+            else:
+                found = lk.extract_visuals(video, sdir, final=True, on_progress=lambda stage, pct: cb(stage, pct, ""))
+            merged, extra = None, []
             if found["shots"] and info["notes"]:
                 cb("merge", 93, "")
                 merged = lk.refine_notes_with_visuals(sdir, info["notes"], final=True, config_name=info["config"])
-            return {"shots": found["shots"], "notes": merged}
+                if self.settings.visual_questions > 0 and not any(q["source"] == "board" for q in info["questions"]):
+                    cb("quiz", 97, "")
+                    extra = lk.add_visual_questions(sdir, info["questions"], n=self.settings.visual_questions, final=True, config_name=info["config"])
+            return {"shots": found["shots"], "notes": merged, "questions": extra}
         source = recordings[0]
         if len(recordings) > 1:                                  # several parts: the sound only (joined earlier)
             joined = storage.upload_dir(sdir) / JOINED_NAME
@@ -229,7 +238,7 @@ class Worker:
             follow = None
             if session is not None and info["kind"] in ("process", "finish"):
                 follow = self._start_background(db, session)
-            elif session is not None and info["kind"] == "visuals":
+            elif session is not None and info["kind"] == "visuals" and session.replay_state != "ready":
                 follow = self._enqueue(db, session, "replay")
             db.commit()
         if follow is not None:
@@ -251,9 +260,11 @@ class Worker:
         """After the notes: the first extra job (pictures; the replay follows by itself). None when this lecture has no recording file."""
         if not self.settings.visuals_enabled or session.source != "upload":
             return None
-        if not any(f.kind == "recording" and not f.removed for f in session.files):
-            return None
-        return self._enqueue(db, session, "visuals")
+        if any(f.kind == "recording" and not f.removed for f in session.files):
+            return self._enqueue(db, session, "visuals")
+        if session.replay_state == "ready" and session.shot_count:     # a retry: the notes were made anew, so put the board content back
+            return self._enqueue(db, session, "visuals")
+        return None
 
     def start_background(self, db, session: LectureSession) -> int | None:
         """Used by the route that makes the replay on request: queue the extra work now. Returns the first job's id."""
@@ -279,6 +290,12 @@ class Worker:
             stats = json.loads(note.stats_json or "{}")
             stats["visuals"] = len(result["shots"])
             note.stats_json = json.dumps(stats)
+        position = max([q.position for q in session.questions] or [0])
+        for q in result.get("questions") or []:                      # extra questions go after the old ones: attempts already made stay valid
+            position += 1
+            db.add(Question(session_id=session.id, position=position, text=q["question"], options_json=json.dumps(q["options"]),
+                            answer_index=int(q["answer_index"]), bloom_level=q.get("bloom_level", ""), explanation=q.get("explanation", ""),
+                            source="board"))
 
     def _store_replay(self, db, session: LectureSession, result: dict, info: dict) -> None:
         """The replay exists: keep it, and delete the unblurred original (and the copies made for the pipeline)."""
@@ -324,7 +341,7 @@ class Worker:
                         row.state, row.error_message = "failed", message
                 elif info["kind"] == "visuals":
                     session.visuals_state = "failed"                 # the notes stay as they were; the replay still gets made
-                    follow = self._enqueue(db, session, "replay")
+                    follow = self._enqueue(db, session, "replay") if session.replay_state != "ready" else None
                 elif info["kind"] == "replay":
                     session.replay_state = "failed"                  # the original stays, so it can be tried again
                 else:
