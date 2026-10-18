@@ -1,6 +1,8 @@
 """Passwords (bcrypt), tokens (JWT HS256), the login lockout and the current_user dependency (SERVER_PLAN.md section 6)."""
 import base64
 import hashlib
+import hmac
+import secrets
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -56,6 +58,16 @@ def create_token(settings: Settings, user_id: int) -> tuple[str, datetime]:
 
 def decode_token(settings: Settings, token: str) -> dict:
     return jwt.decode(token, settings.jwt_secret, algorithms=["HS256"], options={"require": ["exp", "sub"]})
+
+
+def new_code() -> str:
+    """A random 6-digit one-time code."""
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def hash_code(settings: Settings, email: str, code: str) -> str:
+    """Only this hash is stored, so a copy of the database does not reveal a pending code."""
+    return hmac.new(settings.jwt_secret.encode(), f"{email}:{code}".encode(), hashlib.sha256).hexdigest()
 
 
 class LoginGuard:

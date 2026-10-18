@@ -15,6 +15,7 @@ from lecturekit import api as lk
 
 from . import errors
 from .db import make_session_factory
+from .mail import make_mailer
 from .routes import auth, courses, health, live, results, uploads
 from .security import LoginGuard
 from .settings import Settings
@@ -48,6 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                   docs_url=f"{prefix}/docs" if prefix else "/docs",
                   openapi_url=f"{prefix}/openapi.json" if prefix else "/openapi.json")
     app.state.settings, app.state.session_factory, app.state.worker = settings, session_factory, worker
+    app.state.mailer, app.state.resend_times = make_mailer(settings), {}
     app.state.login_guard = LoginGuard(settings.login_max_failures, settings.login_window_seconds)
     errors.register(app)
 

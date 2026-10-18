@@ -17,7 +17,6 @@ def _int(name: str, default: int) -> int:
 class Settings:
     data_dir: Path
     jwt_secret: str
-    invite_code: str
     api_prefix: str = "/api"                 # all routes live under this prefix; "/" serves the web app
     daily_limit: int = 5
     max_recording_mb: int = 1500
@@ -34,6 +33,15 @@ class Settings:
     preload_whisper: bool = True
     housekeeping_seconds: int = 3600
     web_dist: Path | None = None
+    smtp_host: str = ""                      # empty: emails are written to the server log instead of sent
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    google_client_id: str = ""               # empty: Google login is switched off
+    otp_minutes: int = 10
+    otp_max_attempts: int = 5
+    resend_seconds: int = 60
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -41,7 +49,6 @@ class Settings:
         return cls(
             data_dir=Path(os.getenv("DATA_DIR", "/data")),
             jwt_secret=os.getenv("JWT_SECRET", ""),
-            invite_code=os.getenv("INVITE_CODE", ""),
             api_prefix=os.getenv("API_PREFIX", "/api").rstrip("/"),
             daily_limit=_int("DAILY_LIMIT", 5),
             max_recording_mb=_int("MAX_RECORDING_MB", 1500),
@@ -51,14 +58,18 @@ class Settings:
             web_origin=os.getenv("WEB_ORIGIN", ""),
             extension_origin=os.getenv("EXTENSION_ORIGIN", ""),
             web_dist=Path(web_dist) if web_dist else None,
+            smtp_host=os.getenv("SMTP_HOST", ""),
+            smtp_port=_int("SMTP_PORT", 587),
+            smtp_user=os.getenv("SMTP_USER", ""),
+            smtp_password=os.getenv("SMTP_PASSWORD", ""),
+            smtp_from=os.getenv("SMTP_FROM", ""),
+            google_client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
         )
 
     def validate(self) -> None:
         """Refuse to start with a missing or weak secret (SERVER_PLAN.md section 9)."""
         if self.jwt_secret.lower() in WEAK_SECRETS or len(self.jwt_secret) < 32:
             raise RuntimeError("JWT_SECRET must be set to at least 32 random characters")
-        if not self.invite_code:
-            raise RuntimeError("INVITE_CODE must be set")
 
     # derived paths
     @property

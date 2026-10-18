@@ -1,9 +1,9 @@
 """Drive a running server over HTTP, like the web app or the extension would (manual acceptance, SERVER_PLAN.md section 12).
 
-  whole file:  python scripts/smoke.py --url http://localhost:8000 --invite CODE --recording talk.mp4 [--slides slides.pdf]
-  live chunks: python scripts/smoke.py --url ... --invite CODE --recording talk.mp4 --live [--end 600] [--slides slides.pdf]
+  whole file:  python scripts/smoke.py --url http://localhost:8000 --recording talk.mp4 [--slides slides.pdf]
+  live chunks: python scripts/smoke.py --url ... --recording talk.mp4 --live [--end 600] [--slides slides.pdf]
 
-It registers the user if needed, creates a course, module and session, uploads (or streams chunks), waits for the job while
+It registers the user if needed (on a real server, enter the emailed code first, or run: python -m server.admin verify-email <email>), creates a course, module and session, uploads (or streams chunks), waits for the job while
 printing stage and percent, reads the notes and the quiz, submits an attempt, downloads the export and deletes the session.
 The live mode needs lecturekit on the Python path (PYTHONPATH=../lecturekit) and ffmpeg, to cut the chunks.
 """
@@ -19,7 +19,6 @@ import httpx
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://localhost:8000")
-    ap.add_argument("--invite", required=True)
     ap.add_argument("--email", default="smoke@example.com")
     ap.add_argument("--password", default="smoke-test-password")
     ap.add_argument("--recording", required=True)
@@ -31,9 +30,12 @@ def main() -> int:
     a = ap.parse_args()
 
     c = httpx.Client(base_url=a.url.rstrip("/") + "/api", timeout=600, verify=not a.insecure)
-    r = c.post("/auth/register", json={"email": a.email, "password": a.password, "invite_code": a.invite})
+    r = c.post("/auth/register", json={"full_name": "Smoke Test", "email": a.email, "password": a.password, "accept_terms": True})
     print("register:", r.status_code, "(409 = already registered)" if r.status_code == 409 else "")
     r = c.post("/auth/login", json={"email": a.email, "password": a.password})
+    if r.status_code == 403:
+        raise SystemExit("Confirm the email first: POST /auth/verify-email with the code from the email, "
+                         f"or run: python -m server.admin verify-email {a.email}")
     r.raise_for_status()
     h = {"Authorization": "Bearer " + r.json()["token"]}
     course = c.post("/courses", json={"name": "Smoke test"}, headers=h).json()

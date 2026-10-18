@@ -11,6 +11,7 @@ from ..db import get_db
 from ..errors import conflict, unprocessable
 from ..jobs import active, enqueue
 from ..models import LectureSession, MediaFile, User
+from ..validation import Id
 from ..security import current_user
 from ..serialize import session_out
 
@@ -65,7 +66,7 @@ def commit_files(db: Session, session: LectureSession, sdir, staged, live: bool 
 
 
 @router.post("/sessions/{session_id}/upload")
-def upload(session_id: int, request: Request, recording: UploadFile | None = File(None),
+def upload(session_id: Id, request: Request, recording: UploadFile | None = File(None),
            slides: list[UploadFile] = File(default=[]), user: User = Depends(current_user),
            db: Session = Depends(get_db)):
     session = own_session(db, user, session_id)
@@ -97,7 +98,7 @@ def _start(request: Request, db: Session, user: User, session: LectureSession) -
 
 
 @router.post("/sessions/{session_id}/process")
-def process(session_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def process(session_id: Id, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     session = own_session(db, user, session_id)
     if session.source == "live":
         raise conflict("This lecture is recorded live; finish the live upload instead", "live_session")
@@ -105,7 +106,7 @@ def process(session_id: int, request: Request, user: User = Depends(current_user
 
 
 @router.post("/sessions/{session_id}/retry")
-def retry(session_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def retry(session_id: Id, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     session = own_session(db, user, session_id)
     if session.state != "failed":
         raise conflict("Only a failed lecture can be retried", "not_failed")

@@ -1,6 +1,7 @@
 """Small command-line tool for the server owner (SERVER_PLAN.md section 6: no password reset by email).
 
     python -m server.admin set-password <email>
+    python -m server.admin verify-email <email>      (confirm an address by hand, for example when the email never arrives)
     python -m server.admin list-users
 """
 import getpass
@@ -32,10 +33,21 @@ def main(argv: list[str]) -> int:
             db.commit()
         print(f"password changed for {email}")
         return 0
+    if len(argv) == 2 and argv[0] == "verify-email":
+        email = argv[1].strip().lower()
+        with sf() as db:
+            user = db.scalar(select(User).where(User.email == email))
+            if user is None:
+                print(f"no user with email {email}")
+                return 1
+            user.email_verified = True
+            db.commit()
+        print(f"{email} is confirmed")
+        return 0
     if argv == ["list-users"]:
         with sf() as db:
             for u in db.scalars(select(User).order_by(User.id)):
-                print(u.id, u.email, "active" if u.is_active else "inactive", u.created_at)
+                print(u.id, u.email, u.full_name, "verified" if u.email_verified else "NOT verified", "google" if u.google_sub else "", "active" if u.is_active else "inactive", u.created_at)
         return 0
     print(__doc__)
     return 2

@@ -1,12 +1,14 @@
 """Check every feature of a RUNNING server over real HTTP (local, in Docker, or deployed). Prints PASS / FAIL per check.
 
   without AI (no Whisper or Claude calls, nothing to pay):
-      python scripts/api_check.py --url https://localhost:8443 --insecure --invite CODE
+      python scripts/api_check.py --url https://localhost:8443 --insecure --verify-cmd "docker compose exec -T app python -m server.admin verify-email {email}"
   everything, with the real pipeline on a short clip (about 4 minutes, a few cents of Claude credit):
-      python scripts/api_check.py --url ... --invite CODE --recording talk.mp4 --slides slides.pdf [--clip-seconds 330]
+      python scripts/api_check.py --url ... --recording talk.mp4 --slides slides.pdf [--clip-seconds 330]
 
+The emailed code never appears in an API reply, so every test user is confirmed by --verify-cmd: a shell command in which {email} is replaced
+by the user's address (run from the project folder; for a remote server use ssh ... 'cd /opt/lecturekit && docker compose exec -T app python -m server.admin verify-email {email}').
 It creates throw-away users and deletes them at the end. It needs ffmpeg only for the AI part (to cut the clip and the chunks).
-Covers: health, auth (invite code, validation, duplicates, lockout, tokens), courses/modules/sessions (CRUD, validation, isolation
+Covers: health, auth (sign-up details, email verification, Google login, duplicates, lockout, tokens), courses/modules/sessions (CRUD, validation, isolation
 between two users, cascade delete), uploads (types, replace), errors from the pipeline, retry, daily limit, whole-file processing,
 notes, quiz (no answers before an attempt, scoring, history, validation), export, live chunks (contract, missing chunks, finish),
 and deleting the account.
@@ -58,10 +60,24 @@ class Api:
         return self.c.request(method, ("/api" + path) if not path.startswith("/health") else path, headers=headers, **kw)
 
 
-def make_user(api: Api, invite: str, label: str) -> dict:
+def register_body(email: str, **over) -> dict:
+    return {"full_name": "Check User", "email": email, "password": PASSWORD, "accept_terms": True, **over}
+
+
+VERIFY_CMD = ""
+
+
+def confirm_by_command(email: str) -> None:
+    """Confirm an address without the emailed code (the code is only in the email)."""
+    done = subprocess.run(VERIFY_CMD.replace("{email}", email), shell=True, capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, f"--verify-cmd failed for {email}: {done.stdout[-200:]} {done.stderr[-200:]}"
+
+
+def make_user(api: Api, label: str) -> dict:
     email = f"{label}{int(time.time() * 1000)}@example.com"
-    r = api("POST", "/auth/register", json={"email": email, "password": PASSWORD, "invite_code": invite})
+    r = api("POST", "/auth/register", json=register_body(email))
     assert r.status_code == 201, f"cannot create a test user: {r.status_code} {r.text}"
+    confirm_by_command(email)
     token = api("POST", "/auth/login", json={"email": email, "password": PASSWORD}).json()["token"]
     return {"email": email, "token": token}
 
@@ -98,7 +114,7 @@ def run(a) -> int:
     r = api("GET", "/health")
     h = r.json() if r.status_code == 200 else {}
     check("GET /health answers 200 with ok, checks, models, queue_length", r.status_code == 200 and {"ok", "checks", "models", "queue_length"} <= set(h), r.text[:100])
-    check("/health shows no secret or path", not re.search(r"JWT|invite|data_dir|log_dir|sk-ant", r.text, re.I))
+    check("/health shows no secret or path", not re.search(r"JWT|data_dir|log_dir|sk-ant", r.text, re.I))
     key_present = bool(h.get("checks", {}).get("ANTHROPIC_API_KEY"))
     print(f"        (the server {'has' if key_present else 'does NOT have'} an Anthropic API key; ffmpeg {h.get('checks', {}).get('ffmpeg')}, tesseract {h.get('checks', {}).get('tesseract')}, libreoffice {h.get('checks', {}).get('libreoffice')})")
     check("GET /api/health works too", api.c.get("/api/health").status_code == 200)
@@ -109,16 +125,34 @@ def run(a) -> int:
 
     section("2. Accounts")
     email = f"checkA{int(time.time() * 1000)}@example.com"
-    r = api("POST", "/auth/register", json={"email": email, "password": PASSWORD, "invite_code": "wrong-code"})
-    check("register with a wrong invite code -> 403 invite_invalid", r.status_code == 403 and err(r)[0] == "invite_invalid", r.text[:100])
-    r = api("POST", "/auth/register", json={"email": email, "password": "short", "invite_code": a.invite})
+    r = api("POST", "/auth/register", json=register_body(email, password="short"))
     check("register with a short password -> 422", r.status_code == 422 and err(r)[0] == "validation", r.text[:100])
-    r = api("POST", "/auth/register", json={"email": "not-an-email", "password": PASSWORD, "invite_code": a.invite})
+    r = api("POST", "/auth/register", json=register_body("not-an-email"))
     check("register with a bad email -> 422", r.status_code == 422)
-    r = api("POST", "/auth/register", json={"email": email.upper(), "password": PASSWORD, "invite_code": a.invite})
-    check("register ok (email stored in lower case) -> 201, no password in the reply", r.status_code == 201 and r.json()["user"]["email"] == email.lower() and "password" not in r.text.lower().replace("password_hash", "x") and "hash" not in r.text, r.text[:100])
-    r = api("POST", "/auth/register", json={"email": email, "password": PASSWORD, "invite_code": a.invite})
+    r = api("POST", "/auth/register", json=register_body(email, accept_terms=False))
+    check("register without accepting the terms -> 422", r.status_code == 422 and err(r)[0] == "validation", r.text[:100])
+    r = api("POST", "/auth/register", json={"email": email, "password": PASSWORD, "accept_terms": True})
+    check("register without a full name -> 422", r.status_code == 422)
+    r = api("POST", "/auth/register", json=register_body(email.upper()))
+    user = r.json().get("user", {})
+    check("register ok -> 201, email in lower case, not verified yet, no password in the reply",
+          r.status_code == 201 and user.get("email") == email.lower() and user.get("email_verified") is False and user.get("full_name") == "Check User" and r.json().get("verification_sent") is True and "hash" not in r.text, r.text[:100])
+    check("the reply never contains the email code", "code" not in r.text and "token" not in r.text.lower(), r.text[:100])
+    r = api("POST", "/auth/login", json={"email": email, "password": PASSWORD})
+    check("login before the email is confirmed -> 403 email_not_verified", r.status_code == 403 and err(r)[0] == "email_not_verified", r.text[:100])
+    r = api("POST", "/auth/verify-email", json={"email": email, "code": "000000"})
+    check("a wrong code -> 400 invalid_code", r.status_code == 400 and err(r)[0] == "invalid_code", r.text[:100])
+    r = api("POST", "/auth/resend-verification", json={"email": "nobody-here@example.com"})
+    check("resend for an unknown email answers the same 200 (no account is revealed)", r.status_code == 200 and r.json() == {"sent": True}, r.text[:100])
+    confirm_by_command(email)
+    r = api("POST", "/auth/login", json={"email": email, "password": PASSWORD})
+    check("after the email is confirmed, login works", r.status_code == 200, r.text[:100])
+    r = api("POST", "/auth/register", json=register_body(email))
     check("register the same email again -> 409 email_taken", r.status_code == 409 and err(r)[0] == "email_taken", r.text[:100])
+    r = api("GET", "/auth/config")
+    check("GET /auth/config tells whether Google login is on", r.status_code == 200 and set(r.json()) == {"google_enabled", "google_client_id"}, r.text[:100])
+    r = api("POST", "/auth/google", json={"id_token": "not-a-real-token", "accept_terms": True})
+    check("a fake Google token is refused (401 google_invalid, or 503 when Google login is off)", r.status_code in (401, 503) and err(r)[0] in ("google_invalid", "google_disabled"), r.text[:100])
     bad = api("POST", "/auth/login", json={"email": email, "password": "a wrong password"})
     unknown = api("POST", "/auth/login", json={"email": "nobody-here@example.com", "password": PASSWORD})
     check("wrong password and unknown email give the same 401", bad.status_code == unknown.status_code == 401 and bad.json() == unknown.json(), f"{bad.text[:60]} / {unknown.text[:60]}")
@@ -148,7 +182,7 @@ def run(a) -> int:
     check("rename and list lectures", api("PATCH", f"/sessions/{sid}", tokenA, json={"title": "Loops and lists"}).json()["title"] == "Loops and lists" and len(api("GET", f"/modules/{mid}/sessions", tokenA).json()) == 1)
 
     section("4. Isolation: a second user sees and changes nothing of the first")
-    B = make_user(api, a.invite, "checkB")
+    B = make_user(api, "checkB")
     probes = [("GET", f"/courses/{cid}/modules"), ("PATCH", f"/courses/{cid}"), ("DELETE", f"/courses/{cid}"), ("PATCH", f"/modules/{mid}"),
               ("GET", f"/modules/{mid}/sessions"), ("POST", f"/modules/{mid}/sessions"), ("GET", f"/sessions/{sid}"), ("PATCH", f"/sessions/{sid}"),
               ("DELETE", f"/sessions/{sid}"), ("GET", f"/sessions/{sid}/notes"), ("GET", f"/sessions/{sid}/quiz"), ("POST", f"/sessions/{sid}/quiz/attempts"),
@@ -177,7 +211,7 @@ def run(a) -> int:
     check("a new recording replaces the old one; slides stay", names == ["two.m4a"] and sum(f["kind"] == "slides" for f in r.json()["files"]) == 2)
 
     section("6. Errors from the pipeline, retry and the daily limit (no AI needed: the recording is not a real video)")
-    C = make_user(api, a.invite, "checkC")
+    C = make_user(api, "checkC")
     sidc = new_session(api, C["token"])
     garbage_upload(api, C["token"], sidc)
     r = api("POST", f"/sessions/{sidc}/process", C["token"])
@@ -210,7 +244,7 @@ def run(a) -> int:
     wait_job(api, B["token"], r.json()["job_id"], 120)
 
     section("7. Live chunks: the contract and the error cases (no AI needed)")
-    D = make_user(api, a.invite, "checkD")
+    D = make_user(api, "checkD")
     sidd = new_session(api, D["token"], "Live check")
     r = api("POST", f"/sessions/{sidd}/live", D["token"])
     check("open a live recording -> chunk_seconds 300, overlap 5", r.status_code == 200 and r.json() == {"chunk_seconds": 300, "overlap": 5}, r.text[:100])
@@ -236,7 +270,7 @@ def run(a) -> int:
         tmp = Path(tempfile.mkdtemp(prefix="api-check-"))
         clip = tmp / "clip.mp4"
         subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-t", str(a.clip_seconds), "-i", a.recording, "-c", "copy", str(clip)], check=True)
-        E = make_user(api, a.invite, "checkE")
+        E = make_user(api, "checkE")
         sid_e = new_session(api, E["token"], "Real lecture")
         up = [("recording", (clip.name, open(clip, "rb"), "video/mp4"))] + [("slides", (Path(p).name, open(p, "rb"), "application/pdf")) for p in a.slides]
         r = api("POST", f"/sessions/{sid_e}/upload", E["token"], files=up)
@@ -272,7 +306,7 @@ def run(a) -> int:
         check("the other user cannot read these notes or this job", api("GET", f"/sessions/{sid_e}/notes", B["token"]).status_code == 404 and api("GET", f"/jobs/{job['id']}", B["token"]).status_code == 404)
 
         section("9. Real pipeline: live chunks (2 chunks of the same clip, slides sent at finish)")
-        F = make_user(api, a.invite, "checkF")
+        F = make_user(api, "checkF")
         sid_f = new_session(api, F["token"], "Real live lecture")
         api("POST", f"/sessions/{sid_f}/live", F["token"])
         pieces = [(0, 0, 300), (1, 295, a.clip_seconds)]            # chunk k covers [k*300 - 5, (k+1)*300] (the contract)
@@ -318,10 +352,12 @@ def run(a) -> int:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="http://localhost:8000")
-    ap.add_argument("--invite", required=True)
+    ap.add_argument("--verify-cmd", required=True, help="shell command that confirms an address, {email} is replaced (see the top of this file)")
     ap.add_argument("--insecure", action="store_true", help="accept a self-signed certificate (Caddy on localhost)")
     ap.add_argument("--recording", help="a real recording: enables the checks that call Whisper and Claude")
     ap.add_argument("--slides", nargs="*", default=[], help="slide files for the real checks")
     ap.add_argument("--clip-seconds", type=int, default=330, help="how much of the recording to use (needs more than 300 for the live check)")
     ap.add_argument("--keep", action="store_true", help="do not delete the test users at the end")
-    sys.exit(run(ap.parse_args()))
+    args = ap.parse_args()
+    VERIFY_CMD = args.verify_cmd
+    sys.exit(run(args))

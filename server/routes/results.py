@@ -14,13 +14,14 @@ from ..db import get_db
 from ..errors import not_found, unprocessable
 from ..models import Attempt, AttemptAnswer, Job, User, iso
 from ..schemas import AttemptIn
+from ..validation import Id
 from ..security import current_user
 from ..serialize import job_out
 
 router = APIRouter(tags=["results"])
 
 
-def _done_session(db: Session, user: User, session_id: int):
+def _done_session(db: Session, user: User, session_id: Id):
     session = own_session(db, user, session_id)
     if session.state != "done" or session.note is None:
         raise not_found()                                  # 404 until done
@@ -28,7 +29,7 @@ def _done_session(db: Session, user: User, session_id: int):
 
 
 @router.get("/jobs/{job_id}")
-def get_job(job_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def get_job(job_id: Id, user: User = Depends(current_user), db: Session = Depends(get_db)):
     job = db.scalar(select(Job).where(Job.id == job_id, Job.user_id == user.id))
     if job is None:
         raise not_found()
@@ -36,7 +37,7 @@ def get_job(job_id: int, user: User = Depends(current_user), db: Session = Depen
 
 
 @router.get("/sessions/{session_id}/notes")
-def get_notes(session_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def get_notes(session_id: Id, user: User = Depends(current_user), db: Session = Depends(get_db)):
     session = _done_session(db, user, session_id)
     n = session.note
     return {"title": n.title, "full_notes": json.loads(n.full_notes_json), "short_notes": json.loads(n.short_notes_json),
@@ -44,7 +45,7 @@ def get_notes(session_id: int, user: User = Depends(current_user), db: Session =
 
 
 @router.get("/sessions/{session_id}/quiz")
-def get_quiz(session_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def get_quiz(session_id: Id, user: User = Depends(current_user), db: Session = Depends(get_db)):
     """Questions and options only: no answer index, no explanation."""
     session = _done_session(db, user, session_id)
     return {"questions": [{"id": q.id, "position": q.position, "question": q.text,
@@ -53,7 +54,7 @@ def get_quiz(session_id: int, user: User = Depends(current_user), db: Session = 
 
 
 @router.post("/sessions/{session_id}/quiz/attempts", status_code=201)
-def submit_attempt(session_id: int, body: AttemptIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def submit_attempt(session_id: Id, body: AttemptIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     session = _done_session(db, user, session_id)
     questions = list(session.questions)
     if len(body.answers) != len(questions):
@@ -75,7 +76,7 @@ def submit_attempt(session_id: int, body: AttemptIn, user: User = Depends(curren
 
 
 @router.get("/sessions/{session_id}/quiz/attempts")
-def list_attempts(session_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def list_attempts(session_id: Id, user: User = Depends(current_user), db: Session = Depends(get_db)):
     """History: score and time only, never the answers."""
     session = _done_session(db, user, session_id)
     return [{"id": a.id, "score": a.score, "total": a.total, "submitted_at": iso(a.submitted_at)}
@@ -83,7 +84,7 @@ def list_attempts(session_id: int, user: User = Depends(current_user), db: Sessi
 
 
 @router.get("/sessions/{session_id}/export.md")
-def export_markdown(session_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def export_markdown(session_id: Id, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     session = _done_session(db, user, session_id)
     sdir = storage.session_dir(request.app.state.settings, user.id, session.id)
     path = sdir / "out" / f"{session.config}.md"

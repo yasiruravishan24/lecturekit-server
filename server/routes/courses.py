@@ -10,6 +10,7 @@ from ..errors import conflict
 from ..jobs import active
 from ..models import Course, LectureSession, Module, User, iso
 from ..schemas import NameIn, SessionIn
+from ..validation import Id
 from ..security import current_user
 from ..serialize import session_out
 
@@ -53,7 +54,7 @@ def create_course(body: NameIn, user: User = Depends(current_user), db: Session 
 
 
 @router.patch("/courses/{course_id}")
-def rename_course(course_id: int, body: NameIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def rename_course(course_id: Id, body: NameIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     course = own_course(db, user, course_id)
     course.name = body.name
     db.commit()
@@ -61,7 +62,7 @@ def rename_course(course_id: int, body: NameIn, user: User = Depends(current_use
 
 
 @router.delete("/courses/{course_id}", status_code=204)
-def delete_course(course_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def delete_course(course_id: Id, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     course = own_course(db, user, course_id)
     sessions = [s for m in course.modules for s in m.sessions]
     _refuse_if_busy(sessions)
@@ -75,12 +76,12 @@ def delete_course(course_id: int, request: Request, user: User = Depends(current
 # ---- modules -------------------------------------------------------------------------------------
 
 @router.get("/courses/{course_id}/modules")
-def list_modules(course_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def list_modules(course_id: Id, user: User = Depends(current_user), db: Session = Depends(get_db)):
     return [_out(m, course_id=m.course_id) for m in own_course(db, user, course_id).modules]
 
 
 @router.post("/courses/{course_id}/modules", status_code=201)
-def create_module(course_id: int, body: NameIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def create_module(course_id: Id, body: NameIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     course = own_course(db, user, course_id)
     module = Module(course_id=course.id, name=body.name)
     db.add(module)
@@ -89,7 +90,7 @@ def create_module(course_id: int, body: NameIn, user: User = Depends(current_use
 
 
 @router.patch("/modules/{module_id}")
-def rename_module(module_id: int, body: NameIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def rename_module(module_id: Id, body: NameIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     module = own_module(db, user, module_id)
     module.name = body.name
     db.commit()
@@ -97,7 +98,7 @@ def rename_module(module_id: int, body: NameIn, user: User = Depends(current_use
 
 
 @router.delete("/modules/{module_id}", status_code=204)
-def delete_module(module_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def delete_module(module_id: Id, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     module = own_module(db, user, module_id)
     sessions = list(module.sessions)
     _refuse_if_busy(sessions)
@@ -111,13 +112,13 @@ def delete_module(module_id: int, request: Request, user: User = Depends(current
 # ---- sessions ------------------------------------------------------------------------------------
 
 @router.get("/modules/{module_id}/sessions")
-def list_sessions(module_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def list_sessions(module_id: Id, user: User = Depends(current_user), db: Session = Depends(get_db)):
     module = own_module(db, user, module_id)
     return [session_out(db, s) for s in module.sessions]
 
 
 @router.post("/modules/{module_id}/sessions", status_code=201)
-def create_session(module_id: int, body: SessionIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def create_session(module_id: Id, body: SessionIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     module = own_module(db, user, module_id)
     session = LectureSession(module_id=module.id, user_id=user.id, title=body.title)
     db.add(session)
@@ -126,12 +127,12 @@ def create_session(module_id: int, body: SessionIn, user: User = Depends(current
 
 
 @router.get("/sessions/{session_id}")
-def get_session(session_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def get_session(session_id: Id, user: User = Depends(current_user), db: Session = Depends(get_db)):
     return session_out(db, own_session(db, user, session_id))
 
 
 @router.patch("/sessions/{session_id}")
-def rename_session(session_id: int, body: SessionIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def rename_session(session_id: Id, body: SessionIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     session = own_session(db, user, session_id)
     session.title = body.title
     db.commit()
@@ -139,7 +140,7 @@ def rename_session(session_id: int, body: SessionIn, user: User = Depends(curren
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
-def delete_session(session_id: int, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def delete_session(session_id: Id, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     session = own_session(db, user, session_id)
     _refuse_if_busy([session])
     ids = _session_ids([session])

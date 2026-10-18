@@ -11,6 +11,7 @@ from ..db import get_db
 from ..errors import ApiError, conflict, unprocessable
 from ..jobs import enqueue
 from ..models import LiveChunk, LiveUpload, User
+from ..validation import Id
 from ..security import current_user
 from .uploads import commit_files, stage_files
 
@@ -18,7 +19,7 @@ router = APIRouter(tags=["live"])
 OPEN_STATES = ("live", "failed")        # after a failed finish the client may re-send chunks and finish again
 
 
-def _live_session(db: Session, user: User, session_id: int):
+def _live_session(db: Session, user: User, session_id: Id):
     session = own_session(db, user, session_id)
     if session.source != "live" or session.live is None:
         raise conflict("Open a live recording first", "not_live")
@@ -42,7 +43,7 @@ def _status(live: LiveUpload, total: int | None) -> dict:
 
 
 @router.post("/sessions/{session_id}/live")
-def open_live(session_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def open_live(session_id: Id, user: User = Depends(current_user), db: Session = Depends(get_db)):
     session = own_session(db, user, session_id)
     if session.live is None:
         if session.state != "empty":
@@ -54,7 +55,7 @@ def open_live(session_id: int, user: User = Depends(current_user), db: Session =
 
 
 @router.post("/sessions/{session_id}/live/chunks")
-def upload_chunk(session_id: int, request: Request, index: int = Query(ge=0), chunk: UploadFile = File(...),
+def upload_chunk(session_id: Id, request: Request, index: int = Query(ge=0, le=1_000_000), chunk: UploadFile = File(...),
                  user: User = Depends(current_user), db: Session = Depends(get_db)):
     """Saved at once, Whisper queued. The same index again redoes that chunk."""
     session = _live_session(db, user, session_id)
@@ -82,18 +83,20 @@ def upload_chunk(session_id: int, request: Request, index: int = Query(ge=0), ch
 
 
 @router.get("/sessions/{session_id}/live")
-def live_status(session_id: int, total: int | None = Query(None, ge=1), user: User = Depends(current_user),
+def live_status(session_id: Id, total: int | None = Query(None, ge=1, le=1000), user: User = Depends(current_user),
                 db: Session = Depends(get_db)):
     return _status(_live_session(db, user, session_id).live, total)
 
 
 @router.post("/sessions/{session_id}/live/finish")
-def finish(session_id: int, request: Request, total: int = Query(ge=1), slides: list[UploadFile] = File(default=[]),
+def finish(session_id: Id, request: Request, total: int = Query(ge=1, le=1000), slides: list[UploadFile] = File(default=[]),
            user: User = Depends(current_user), db: Session = Depends(get_db)):
     """After Stop: all chunks must have arrived (they may still be queued for Whisper: the queue is FIFO)."""
     session = _live_session(db, user, session_id)
     if session.state not in OPEN_STATES:
         raise conflict("This live recording is already being processed", "busy")
+    if total > request.app.state.settings.max_chunks_per_session:
+        raise unprocessable(f"A recording can have at most {request.app.state.settings.max_chunks_per_session} chunks", "validation")
     missing = _status(session.live, total)["missing"]
     if missing:
         raise unprocessable(_missing_message(missing), "missing_input")

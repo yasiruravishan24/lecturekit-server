@@ -30,7 +30,14 @@ class User(Base):
     __tablename__ = "user"
     id: Mapped[int] = mapped_column(primary_key=True)
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
-    password_hash: Mapped[str] = mapped_column(String(100))
+    password_hash: Mapped[str] = mapped_column(String(100), default="")     # "" for an account that only uses Google
+    full_name: Mapped[str] = mapped_column(String(120), default="")
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    google_sub: Mapped[str | None] = mapped_column(String(64), unique=True, index=True, nullable=True)
+    terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    otp_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)           # the pending email code (hashed)
+    otp_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    otp_attempts: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     courses = relationship("Course", cascade="all, delete-orphan", passive_deletes=True)

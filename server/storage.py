@@ -42,6 +42,9 @@ def save_upload(upload: UploadFile, dest: Path, limit_mb: int) -> int:
     except BaseException:
         dest.unlink(missing_ok=True)
         raise
+    if size == 0:
+        dest.unlink(missing_ok=True)
+        raise ApiError(422, "validation", "The file is empty")
     return size
 
 

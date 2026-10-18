@@ -1,6 +1,7 @@
 """Offline test setup (SERVER_PLAN.md section 12): temporary database and storage, a real worker thread, and
 fakes for the three lecturekit calls that write the same files and results (no Whisper, no Claude, no network)."""
 import io
+import re
 import json
 import os
 import tempfile
@@ -22,12 +23,11 @@ from lecturekit.errors import MissingInputError
 from server.main import create_app
 from server.settings import Settings
 
-INVITE = "invite-123"
 PASSWORD = "correct horse battery"
 
 
 def make_settings(tmp_path, **over) -> Settings:
-    base = dict(data_dir=tmp_path / "data", jwt_secret="s" * 40, invite_code=INVITE, bcrypt_rounds=4,
+    base = dict(data_dir=tmp_path / "data", jwt_secret="s" * 40, bcrypt_rounds=4,
                 preload_whisper=False, housekeeping_seconds=3600)
     base.update(over)
     return Settings(**base)
@@ -124,6 +124,12 @@ def fake_lk(monkeypatch):
     return fake
 
 
+@pytest.fixture(autouse=True)
+def _outbox(monkeypatch):
+    """Every app made in a test keeps its emails in app.state.mailer (an Outbox) instead of sending them."""
+    monkeypatch.setattr("server.main.make_mailer", lambda settings: Outbox())
+
+
 @pytest.fixture
 def settings(tmp_path):
     return make_settings(tmp_path)
@@ -147,9 +153,31 @@ def root_client(app):
         yield c
 
 
-def register(client, email="a@example.com", password=PASSWORD):
-    r = client.post("/auth/register", json={"email": email, "password": password, "invite_code": INVITE})
+class Outbox:
+    """Stands in for the mailer: keeps what would have been emailed."""
+
+    def __init__(self):
+        self.sent: list[tuple[str, str, str, str | None]] = []
+
+    def send(self, to, subject, text, html=None):
+        self.sent.append((to, subject, text, html))
+
+    def code_for(self, email) -> str:
+        text = [m for m in self.sent if m[0] == email and "verify" in m[1].lower()][-1][2]
+        return re.search(r"\b(\d{6})\b", text).group(1)
+
+
+def register_body(email="a@example.com", password=PASSWORD, **over):
+    return {"full_name": "Test User", "email": email, "password": password, "accept_terms": True, **over}
+
+
+def register(client, email="a@example.com", password=PASSWORD, verify=True):
+    r = client.post("/auth/register", json=register_body(email, password))
     assert r.status_code == 201, r.text
+    if verify:
+        r2 = client.post("/auth/verify-email", json={"email": email, "code": client.app.state.mailer.code_for(email.lower())})
+        assert r2.status_code == 200, r2.text
+        return r2.json()["user"]
     return r.json()["user"]
 
 
