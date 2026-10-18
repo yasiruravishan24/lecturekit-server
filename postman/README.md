@@ -1,6 +1,6 @@
 # Postman collection
 
-`lecturekit.postman_collection.json` has one request for every route of the API (39 requests in 10 folders: System, Auth, Courses, Modules, Sessions, Processing, Jobs, Results, Live Recording, Account). Each request has a description (purpose, authentication, parameters, possible responses) and test scripts that check the answer.
+`lecturekit.postman_collection.json` has one request for every route of the API (45 requests in 11 folders: System, Auth, Courses, Modules, Sessions, Processing, Jobs, Results, Replay And Pictures, Live Recording, Account). Each request has a description (purpose, authentication, parameters, possible responses) and test scripts that check the answer.
 
 ## Setup
 

@@ -44,7 +44,7 @@ def config(request: Request):
     s = request.app.state.settings
     return {"google_enabled": bool(s.google_client_id), "google_client_id": s.google_client_id or None,
             "limits": {"daily_limit": s.daily_limit, "keep_media_days": s.keep_media_days, "max_recording_mb": s.max_recording_mb,
-                       "max_slides_mb": s.max_slides_mb, "max_recording_parts": s.max_recording_parts}}
+                       "max_slides_mb": s.max_slides_mb, "max_recording_parts": s.max_recording_parts, "max_storage_gb": s.max_storage_gb}}
 
 
 @router.post("/register", status_code=201)
@@ -158,6 +158,13 @@ def google_login(body: GoogleIn, request: Request, background: BackgroundTasks, 
     return {"token": token, "expires_at": iso(expires), "user": user_out(user)}
 
 
+@router.get("/usage")
+def usage(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """How much of the user's storage is used (recordings kept for replay, slides)."""
+    from .media import storage_used
+    return {"used_bytes": storage_used(db, user.id), "limit_bytes": request.app.state.settings.max_storage_gb * 1024 ** 3}
+
+
 @router.get("/me")
 def me(user: User = Depends(current_user)):
     return {"user": user_out(user)}
@@ -166,7 +173,8 @@ def me(user: User = Depends(current_user)):
 @router.delete("/me", status_code=204)
 def delete_me(request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     """Delete the account and everything it owns: rows (cascade) and files."""
-    busy = db.scalar(select(Job.id).where(Job.user_id == user.id, Job.state.in_(("queued", "processing"))).limit(1))
+    busy = db.scalar(select(Job.id).where(Job.user_id == user.id, Job.state.in_(("queued", "processing")),
+                                          Job.kind.not_in(("visuals", "replay"))).limit(1))      # extra background work does not hold up deleting
     if busy:
         raise ApiError(409, "busy", "A lecture is still being processed; try again when it has finished")
     settings, user_id = request.app.state.settings, user.id

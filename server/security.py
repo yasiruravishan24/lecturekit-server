@@ -60,6 +60,21 @@ def decode_token(settings: Settings, token: str) -> dict:
     return jwt.decode(token, settings.jwt_secret, algorithms=["HS256"], options={"require": ["exp", "sub"]})
 
 
+def create_media_token(settings: Settings, user_id: int, session_id: int, what: str, ident: int = 0) -> str:
+    """A signed link for a <video> or <img> tag, which cannot send an Authorization header. Valid for a short time, for one file."""
+    now = datetime.now(timezone.utc)
+    return jwt.encode({"sub": str(user_id), "typ": "media", "sid": session_id, "what": what, "id": ident, "iat": now,
+                       "exp": now + timedelta(minutes=settings.media_link_minutes)}, settings.jwt_secret, algorithm="HS256")
+
+
+def read_media_token(settings: Settings, token: str) -> dict | None:
+    try:
+        payload = decode_token(settings, token)
+    except jwt.PyJWTError:
+        return None
+    return payload if payload.get("typ") == "media" else None
+
+
 def new_code() -> str:
     """A random 6-digit one-time code."""
     return f"{secrets.randbelow(1_000_000):06d}"
@@ -109,6 +124,8 @@ def current_user(request: Request, cred: HTTPAuthorizationCredentials | None = D
         raise ApiError(401, "unauthorized", "Please log in")
     try:
         payload = decode_token(request.app.state.settings, cred.credentials)
+        if payload.get("typ"):                    # a media link is not a login token
+            raise ValueError("not a login token")
         user_id = int(payload["sub"])
     except (jwt.PyJWTError, ValueError):
         raise ApiError(401, "unauthorized", "Please log in") from None

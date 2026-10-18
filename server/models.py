@@ -74,7 +74,14 @@ class LectureSession(Base):
     source: Mapped[str] = mapped_column(String(8), default="upload")   # upload | live
     config: Mapped[str | None] = mapped_column(String(1), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    # the picture and replay side, made in the background after the notes (see worker.py)
+    visuals_state: Mapped[str] = mapped_column(String(10), default="none")      # none queued processing done failed skipped
+    replay_state: Mapped[str] = mapped_column(String(10), default="none")       # none queued processing ready failed
+    replay_kind: Mapped[str | None] = mapped_column(String(5), nullable=True)   # video | audio
+    replay_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    shot_count: Mapped[int] = mapped_column(Integer, default=0)
     files = relationship("MediaFile", cascade="all, delete-orphan", passive_deletes=True, order_by="MediaFile.id")
+    shots = relationship("Shot", cascade="all, delete-orphan", passive_deletes=True, order_by="Shot.t")
     live = relationship("LiveUpload", cascade="all, delete-orphan", passive_deletes=True, uselist=False)
     note = relationship("Note", cascade="all, delete-orphan", passive_deletes=True, uselist=False)
     questions = relationship("Question", cascade="all, delete-orphan", passive_deletes=True, order_by="Question.position")
@@ -89,6 +96,20 @@ class MediaFile(Base):
     original_name: Mapped[str] = mapped_column(String(255))            # text only, never used as a path
     stored_name: Mapped[str] = mapped_column(String(64))
     bytes: Mapped[int] = mapped_column(Integer)
+    removed: Mapped[bool] = mapped_column(Boolean, default=False)      # the original was deleted once the replay existed
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Shot(Base):
+    """A picture of the board or screen at a moment of the lecture (faces blurred, cropped)."""
+    __tablename__ = "shot"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = _fk("session.id")
+    t: Mapped[float] = mapped_column(Float)                              # seconds into the lecture
+    kind: Mapped[str] = mapped_column(String(8))                         # board | slide | screen
+    text: Mapped[str] = mapped_column(Text, default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    file: Mapped[str] = mapped_column(String(64))                        # server-made name inside the session's shots folder
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
@@ -97,7 +118,7 @@ class Job(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     session_id: Mapped[int | None] = _fk("session.id", null=True, on_delete="SET NULL")
     user_id: Mapped[int] = _fk("user.id")
-    kind: Mapped[str] = mapped_column(String(8))                       # process | chunk | finish
+    kind: Mapped[str] = mapped_column(String(8))                       # process | chunk | finish | visuals | replay
     state: Mapped[str] = mapped_column(String(10), default="queued")   # queued processing done failed
     stage: Mapped[str] = mapped_column(String(16), default="queued")
     percent: Mapped[int] = mapped_column(Integer, default=0)

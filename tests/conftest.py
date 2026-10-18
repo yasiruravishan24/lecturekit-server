@@ -28,7 +28,7 @@ PASSWORD = "correct horse battery"
 
 def make_settings(tmp_path, **over) -> Settings:
     base = dict(data_dir=tmp_path / "data", jwt_secret="s" * 40, bcrypt_rounds=4,
-                preload_whisper=False, housekeeping_seconds=3600)
+                preload_whisper=False, housekeeping_seconds=3600, visuals_enabled=False)
     base.update(over)
     return Settings(**base)
 
@@ -115,12 +115,61 @@ class FakeLK:
             self.running -= 1
 
 
+class FakeBackground:
+    """Stands in for the picture and replay calls of lecturekit.api (no OpenCV, no ffmpeg, no Claude)."""
+
+    def __init__(self, owner):
+        self.owner = owner
+        self.gate = threading.Event()               # clear it to hold the background lane, so tests can look at it
+        self.gate.set()
+        self.visuals_fail: Exception | None = None
+        self.replay_fail: Exception | None = None
+        self.shots = [{"t": 12.0, "kind": "board", "text": "F = m a", "description": "", "file": "shot_001.jpg"},
+                      {"t": 95.5, "kind": "slide", "text": "Loops", "description": "a flow chart", "file": "shot_002.jpg"}]
+
+    def extract_visuals(self, video, out_dir, final=True, llm=None, max_frames=None, on_progress=None):
+        self.owner.calls.append(("visuals", Path(video).name))
+        for stage, pct in (("frames", 5), ("blur", 30), ("read", 45), ("save", 90)):
+            if on_progress:
+                on_progress(stage, pct)
+        self.gate.wait(10)
+        if self.visuals_fail:
+            raise self.visuals_fail
+        shots = Path(out_dir) / "shots"
+        shots.mkdir(parents=True, exist_ok=True)
+        for s in self.shots:
+            (shots / s["file"]).write_bytes(b"\xff\xd8fakejpeg" + s["file"].encode())
+        return {"shots": list(self.shots)}
+
+    def refine_notes_with_visuals(self, out_dir, notes, final=True, llm=None, config_name=None):
+        self.owner.calls.append(("refine", config_name))
+        return {"title": notes["title"], "full_notes": notes["full_notes"] + [{"heading": "From the board", "summary": "F = m a", "key_points": ["force"]}],
+                "short_notes": notes["short_notes"]}
+
+    def make_replay(self, src, dst_dir, name="replay", on_progress=None):
+        self.owner.calls.append(("replay", Path(src).name))
+        if on_progress:
+            on_progress(50)
+        self.gate.wait(10)
+        if self.replay_fail:
+            raise self.replay_fail
+        audio = Path(src).suffix.lower() in (".m4a", ".mp3", ".wav", ".aac", ".ogg")
+        f = Path(dst_dir) / (name + (".m4a" if audio else ".mp4"))
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_bytes(bytes(range(256)) * 40)
+        return {"kind": "audio" if audio else "video", "file": f.name, "bytes": f.stat().st_size}
+
+
 @pytest.fixture
 def fake_lk(monkeypatch):
     fake = FakeLK()
     monkeypatch.setattr(lk, "process_session", fake.process_session)
     monkeypatch.setattr(lk, "add_chunk", fake.add_chunk)
     monkeypatch.setattr(lk, "finish_chunked_session", fake.finish_chunked_session)
+    fake.bg = FakeBackground(fake)
+    monkeypatch.setattr(lk, "extract_visuals", fake.bg.extract_visuals)
+    monkeypatch.setattr(lk, "refine_notes_with_visuals", fake.bg.refine_notes_with_visuals)
+    monkeypatch.setattr(lk, "make_replay", fake.bg.make_replay)
     return fake
 
 

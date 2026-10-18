@@ -63,6 +63,8 @@ def doc(summary, auth="Bearer token", params="", body="", responses=()):
 
 
 def url(path, query=None):
+    if path.startswith("{{baseUrl}}"):                         # a full address built from variables (the signed media link)
+        return {"raw": path, "host": [path]}
     node = {"raw": "{{baseUrl}}" + path, "host": ["{{baseUrl}}"], "path": [p for p in path.split("/") if p]}
     if query:
         node["query"] = [{"key": k, "value": v, "description": d} for k, v, d in query]
@@ -70,9 +72,9 @@ def url(path, query=None):
     return node
 
 
-def request(name, method, path, description, tests="", *, json_body=None, form=None, query=None, auth="inherit", pre=""):
+def request(name, method, path, description, tests="", *, json_body=None, form=None, query=None, auth="inherit", pre="", headers=()):
     """auth: 'inherit' (collection bearer token), 'none', or the name of a variable holding another token"""
-    req = {"method": method, "header": [], "url": url(path, query), "description": description}
+    req = {"method": method, "header": [{"key": k, "value": v} for k, v in headers], "url": url(path, query), "description": description}
     if auth == "none":
         req["auth"] = {"type": "noauth"}
     elif auth != "inherit":
@@ -280,6 +282,29 @@ def build():
                 status(200) + '\npm.test("Is Markdown", () => { pm.expect(pm.response.headers.get("Content-Type")).to.include("text/markdown"); pm.expect(pm.response.text()).to.match(/^#/); });'),
     ])
 
+    replay = group("Replay And Pictures", [
+        request("Get Replay Info", "GET", "/api/sessions/{{sessionId}}/replay", doc(
+            "After the notes, the server makes (in the background, at low priority) pictures of the board and screen and a replay of the recording with faces blurred. "
+            "This shows where that stands. `url` is a signed link, valid for a short time, that needs no token.", params="`session_id` in the path",
+            responses=[(200, "`{state, kind, bytes, url, percent, visuals_state, visuals_percent}`; `state`: none, queued, processing, ready, failed"), (404, "not found")]),
+            status(200) + '\npm.test("Has the state of the replay and of the pictures", () => pm.expect(body()).to.include.all.keys("state", "visuals_state", "url"));\nset("replayUrl", body().url || "");'),
+        request("Make Replay", "POST", "/api/sessions/{{sessionId}}/replay", doc(
+            "Makes the board pictures and the replay now, for a lecture processed before they existed or after a failure. Needs the original recording to still be on the server.",
+            params="`session_id` in the path", responses=[(200, "`{job_id}`"), (409, "`busy` (still being worked on) or `replay_exists`"), (422, "the notes are not ready, or the original recording is gone")]),
+            status(200, 409, 422)),
+        request("List Pictures", "GET", "/api/sessions/{{sessionId}}/shots", doc(
+            "The pictures of the board and screen (faces blurred, cropped), in time order, each with a signed link to the image.", params="`session_id` in the path",
+            responses=[(200, "`[{id, t, kind, text, description, url}]`, `kind`: board, slide, screen")]),
+            status(200) + '\npm.test("Is a list", () => pm.expect(body()).to.be.an("array"));\nset("shotUrl", body().length ? body()[0].url : "");'),
+        request("Download Replay", "GET", "{{baseUrl}}{{replayUrl}}", doc(
+            "Streams the replay (video with blurred faces, or audio). Supports HTTP Range, so a player can seek. The link comes from Get Replay Info and needs no token. "
+            "Waits up to a minute for the replay to be ready.", "signed link in the address",
+            params="header `Range: bytes=0-99` asks for the first 100 bytes", responses=[(206, "the requested part"), (200, "the whole file"), (404, "link expired or not valid")]),
+            'if (!get("replayUrl")) { pm.test.skip("The replay is not ready: no link"); } else {\npm.test("Partial content for a Range request", () => pm.expect([200, 206]).to.include(pm.response.code));\npm.test("Is video or audio", () => pm.expect(pm.response.headers.get("Content-Type")).to.match(/video\\/mp4|audio\\/mp4/));\n}',
+            auth="none", headers=[("Range", "bytes=0-99")],
+            pre='(async () => {\n  for (let i = 0; i < 30; i++) {\n    const r = await call("GET", "/sessions/" + get("sessionId") + "/replay");\n    if (r.json.url) { set("replayUrl", r.json.url); return; }\n    if (r.json.state === "failed" || r.json.state === "none") return;\n    await sleep(2000);\n  }\n})();'),
+    ], "Made in the background after the notes: board and screen pictures, and a replay with blurred faces.")
+
     live = group("Live Recording", [
         request("Open Live Session", "POST", "/api/sessions/{{liveSessionId}}/live", doc(
             "Turns an empty lecture into a live recording and returns the chunk contract the client must follow: audio is sent in pieces of `chunk_seconds`, each starting `overlap` seconds early. Repeating the call changes nothing. This collection first creates an empty lecture.",
@@ -307,6 +332,8 @@ def build():
     ], "Used by the browser extension: the lecture is sent in pieces while it is recorded.")
 
     account = group("Account", [
+        request("Get Storage Usage", "GET", "/api/auth/usage", doc("How much of the account's storage is used (recordings kept for replay, slides) and the limit.",
+                responses=[(200, "`{used_bytes, limit_bytes}`")]), status(200) + '\npm.test("Has used and limit", () => pm.expect(body()).to.include.all.keys("used_bytes", "limit_bytes"));'),
         request("Delete Account", "DELETE", "/api/auth/me", doc(
             "Permanently deletes the account and everything it owns: courses, lectures, recordings, notes and quiz attempts. Refused while one of the account's lectures is being processed. "
             "This is the account you are logged in with, so it is the last request of the collection. The next run starts with Register and a new code.",
@@ -314,7 +341,7 @@ def build():
             status(204)),
     ])
 
-    return [system, auth, courses, modules, sessions, processing, jobs, results, live, account]
+    return [system, auth, courses, modules, sessions, processing, jobs, results, replay, live, account]
 
 
 def main():
@@ -329,7 +356,7 @@ def main():
                            "then run Register, copy the 6-digit code from the email into `otpCode`, and run Verify Email and Login; the token is saved and sent automatically. Error replies look like `" + ERR + "`.",
         },
         "auth": {"type": "bearer", "bearer": [{"key": "token", "value": "{{token}}", "type": "string"}]},
-        "variable": [{"key": k, "value": ""} for k in ("token", "userEmail", "courseId", "moduleId", "sessionId", "jobId", "questionCount")],
+        "variable": [{"key": k, "value": ""} for k in ("token", "userEmail", "replayUrl", "shotUrl", "courseId", "moduleId", "sessionId", "jobId", "questionCount")],
         "item": folders,
     }
     environment = {

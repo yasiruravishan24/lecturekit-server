@@ -33,3 +33,8 @@ def enqueue(request: Request, db: Session, user: User, session: LectureSession, 
 
 def active(session: LectureSession) -> bool:
     return session.state in ("queued", "processing")
+
+
+def background_busy(session: LectureSession) -> bool:
+    """The pictures or the replay of this lecture are still being made (they read the recording)."""
+    return session.visuals_state in ("queued", "processing") or session.replay_state in ("queued", "processing")

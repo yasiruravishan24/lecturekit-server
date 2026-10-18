@@ -181,6 +181,13 @@ def run(a) -> int:
     check("create a lecture: state empty, no files, no notes", r.status_code == 201 and s["state"] == "empty" and s["files"] == [] and s["has_notes"] is False and s["latest_job"] is None, r.text[:120])
     check("rename and list lectures", api("PATCH", f"/sessions/{sid}", tokenA, json={"title": "Loops and lists"}).json()["title"] == "Loops and lists" and len(api("GET", f"/modules/{mid}/sessions", tokenA).json()) == 1)
 
+    r = api("GET", f"/sessions/{sid}/replay", tokenA)
+    check("a new lecture has no replay yet and no pictures", r.status_code == 200 and r.json()["state"] == "none" and r.json()["url"] is None and api("GET", f"/sessions/{sid}/shots", tokenA).json() == [], r.text[:100])
+    r = api("GET", "/auth/usage", tokenA)
+    check("storage usage is reported", r.status_code == 200 and r.json()["used_bytes"] == 0 and r.json()["limit_bytes"] > 0, r.text[:100])
+    check("a made-up media link gives 404", api("GET", "/media/not-a-real-link").status_code == 404)
+    check("the replay cannot be made before the notes exist -> 422", api("POST", f"/sessions/{sid}/replay", tokenA).status_code == 422)
+
     section("4. Isolation: a second user sees and changes nothing of the first")
     B = make_user(api, "checkB")
     probes = [("GET", f"/courses/{cid}/modules"), ("PATCH", f"/courses/{cid}"), ("DELETE", f"/courses/{cid}"), ("PATCH", f"/modules/{mid}"),

@@ -24,6 +24,14 @@
       "value": ""
     },
     {
+      "key": "replayUrl",
+      "value": ""
+    },
+    {
+      "key": "shotUrl",
+      "value": ""
+    },
+    {
       "key": "courseId",
       "value": ""
     },
@@ -2547,6 +2555,291 @@
       ]
     },
     {
+      "name": "Replay And Pictures",
+      "description": "Made in the background after the notes: board and screen pictures, and a replay with blurred faces.",
+      "item": [
+        {
+          "name": "Get Replay Info",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sessions",
+                "{{sessionId}}",
+                "replay"
+              ]
+            },
+            "description": "After the notes, the server makes (in the background, at low priority) pictures of the board and screen and a replay of the recording with faces blurred. This shows where that stands. `url` is a signed link, valid for a short time, that needs no token.\n\n**Authentication:** Bearer token\n\n**Parameters:** `session_id` in the path\n\n**Responses**\n- `200` `{state, kind, bytes, url, percent, visuals_state, visuals_percent}`; `state`: none, queued, processing, ready, failed\n- `404` not found"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "const set = (k, v) => pm.collectionVariables.set(k, v);",
+                  "const get = (k) => pm.collectionVariables.get(k);",
+                  "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
+                  "const call = (method, path, opts = {}) => new Promise((resolve, reject) => {",
+                  "  const header = {};",
+                  "  if (!opts.anonymous) header.Authorization = \"Bearer \" + (opts.token || get(\"token\"));",
+                  "  if (opts.json !== undefined) header[\"Content-Type\"] = \"application/json\";",
+                  "  if (opts.contentType) header[\"Content-Type\"] = opts.contentType;",
+                  "  const req = { url: pm.variables.replaceIn(\"{{baseUrl}}/api\" + path), method, header };",
+                  "  if (opts.json !== undefined) req.body = { mode: \"raw\", raw: JSON.stringify(opts.json) };",
+                  "  if (opts.raw !== undefined) req.body = { mode: \"raw\", raw: opts.raw };",
+                  "  pm.sendRequest(req, (err, res) => {",
+                  "    if (err) return reject(err);",
+                  "    let json = {}; try { json = res.json(); } catch (e) { /* no body */ }",
+                  "    resolve({ code: res.code, json });",
+                  "  });",
+                  "});",
+                  "const waitForJob = async (jobId, token) => {",
+                  "  for (let i = 0; i < 400; i++) {",
+                  "    const r = await call(\"GET\", \"/jobs/\" + jobId, { token });",
+                  "    if (r.json.state === \"done\" || r.json.state === \"failed\") return r.json;",
+                  "    await sleep(2000);",
+                  "  }",
+                  "  return { state: \"timeout\" };",
+                  "};",
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Has the state of the replay and of the pictures\", () => pm.expect(body()).to.include.all.keys(\"state\", \"visuals_state\", \"url\"));",
+                  "set(\"replayUrl\", body().url || \"\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Make Replay",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/replay",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sessions",
+                "{{sessionId}}",
+                "replay"
+              ]
+            },
+            "description": "Makes the board pictures and the replay now, for a lecture processed before they existed or after a failure. Needs the original recording to still be on the server.\n\n**Authentication:** Bearer token\n\n**Parameters:** `session_id` in the path\n\n**Responses**\n- `200` `{job_id}`\n- `409` `busy` (still being worked on) or `replay_exists`\n- `422` the notes are not ready, or the original recording is gone"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "const set = (k, v) => pm.collectionVariables.set(k, v);",
+                  "const get = (k) => pm.collectionVariables.get(k);",
+                  "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
+                  "const call = (method, path, opts = {}) => new Promise((resolve, reject) => {",
+                  "  const header = {};",
+                  "  if (!opts.anonymous) header.Authorization = \"Bearer \" + (opts.token || get(\"token\"));",
+                  "  if (opts.json !== undefined) header[\"Content-Type\"] = \"application/json\";",
+                  "  if (opts.contentType) header[\"Content-Type\"] = opts.contentType;",
+                  "  const req = { url: pm.variables.replaceIn(\"{{baseUrl}}/api\" + path), method, header };",
+                  "  if (opts.json !== undefined) req.body = { mode: \"raw\", raw: JSON.stringify(opts.json) };",
+                  "  if (opts.raw !== undefined) req.body = { mode: \"raw\", raw: opts.raw };",
+                  "  pm.sendRequest(req, (err, res) => {",
+                  "    if (err) return reject(err);",
+                  "    let json = {}; try { json = res.json(); } catch (e) { /* no body */ }",
+                  "    resolve({ code: res.code, json });",
+                  "  });",
+                  "});",
+                  "const waitForJob = async (jobId, token) => {",
+                  "  for (let i = 0; i < 400; i++) {",
+                  "    const r = await call(\"GET\", \"/jobs/\" + jobId, { token });",
+                  "    if (r.json.state === \"done\" || r.json.state === \"failed\") return r.json;",
+                  "    await sleep(2000);",
+                  "  }",
+                  "  return { state: \"timeout\" };",
+                  "};",
+                  "pm.test(\"Status is 200 or 409 or 422\", () => pm.expect([200, 409, 422]).to.include(pm.response.code));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Pictures",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/shots",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sessions",
+                "{{sessionId}}",
+                "shots"
+              ]
+            },
+            "description": "The pictures of the board and screen (faces blurred, cropped), in time order, each with a signed link to the image.\n\n**Authentication:** Bearer token\n\n**Parameters:** `session_id` in the path\n\n**Responses**\n- `200` `[{id, t, kind, text, description, url}]`, `kind`: board, slide, screen"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "const set = (k, v) => pm.collectionVariables.set(k, v);",
+                  "const get = (k) => pm.collectionVariables.get(k);",
+                  "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
+                  "const call = (method, path, opts = {}) => new Promise((resolve, reject) => {",
+                  "  const header = {};",
+                  "  if (!opts.anonymous) header.Authorization = \"Bearer \" + (opts.token || get(\"token\"));",
+                  "  if (opts.json !== undefined) header[\"Content-Type\"] = \"application/json\";",
+                  "  if (opts.contentType) header[\"Content-Type\"] = opts.contentType;",
+                  "  const req = { url: pm.variables.replaceIn(\"{{baseUrl}}/api\" + path), method, header };",
+                  "  if (opts.json !== undefined) req.body = { mode: \"raw\", raw: JSON.stringify(opts.json) };",
+                  "  if (opts.raw !== undefined) req.body = { mode: \"raw\", raw: opts.raw };",
+                  "  pm.sendRequest(req, (err, res) => {",
+                  "    if (err) return reject(err);",
+                  "    let json = {}; try { json = res.json(); } catch (e) { /* no body */ }",
+                  "    resolve({ code: res.code, json });",
+                  "  });",
+                  "});",
+                  "const waitForJob = async (jobId, token) => {",
+                  "  for (let i = 0; i < 400; i++) {",
+                  "    const r = await call(\"GET\", \"/jobs/\" + jobId, { token });",
+                  "    if (r.json.state === \"done\" || r.json.state === \"failed\") return r.json;",
+                  "    await sleep(2000);",
+                  "  }",
+                  "  return { state: \"timeout\" };",
+                  "};",
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Is a list\", () => pm.expect(body()).to.be.an(\"array\"));",
+                  "set(\"shotUrl\", body().length ? body()[0].url : \"\");"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Download Replay",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Range",
+                "value": "bytes=0-99"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}{{replayUrl}}",
+              "host": [
+                "{{baseUrl}}{{replayUrl}}"
+              ]
+            },
+            "description": "Streams the replay (video with blurred faces, or audio). Supports HTTP Range, so a player can seek. The link comes from Get Replay Info and needs no token. Waits up to a minute for the replay to be ready.\n\n**Authentication:** signed link in the address\n\n**Parameters:** header `Range: bytes=0-99` asks for the first 100 bytes\n\n**Responses**\n- `206` the requested part\n- `200` the whole file\n- `404` link expired or not valid",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "const set = (k, v) => pm.collectionVariables.set(k, v);",
+                  "const get = (k) => pm.collectionVariables.get(k);",
+                  "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
+                  "const call = (method, path, opts = {}) => new Promise((resolve, reject) => {",
+                  "  const header = {};",
+                  "  if (!opts.anonymous) header.Authorization = \"Bearer \" + (opts.token || get(\"token\"));",
+                  "  if (opts.json !== undefined) header[\"Content-Type\"] = \"application/json\";",
+                  "  if (opts.contentType) header[\"Content-Type\"] = opts.contentType;",
+                  "  const req = { url: pm.variables.replaceIn(\"{{baseUrl}}/api\" + path), method, header };",
+                  "  if (opts.json !== undefined) req.body = { mode: \"raw\", raw: JSON.stringify(opts.json) };",
+                  "  if (opts.raw !== undefined) req.body = { mode: \"raw\", raw: opts.raw };",
+                  "  pm.sendRequest(req, (err, res) => {",
+                  "    if (err) return reject(err);",
+                  "    let json = {}; try { json = res.json(); } catch (e) { /* no body */ }",
+                  "    resolve({ code: res.code, json });",
+                  "  });",
+                  "});",
+                  "const waitForJob = async (jobId, token) => {",
+                  "  for (let i = 0; i < 400; i++) {",
+                  "    const r = await call(\"GET\", \"/jobs/\" + jobId, { token });",
+                  "    if (r.json.state === \"done\" || r.json.state === \"failed\") return r.json;",
+                  "    await sleep(2000);",
+                  "  }",
+                  "  return { state: \"timeout\" };",
+                  "};",
+                  "(async () => {",
+                  "  for (let i = 0; i < 30; i++) {",
+                  "    const r = await call(\"GET\", \"/sessions/\" + get(\"sessionId\") + \"/replay\");",
+                  "    if (r.json.url) { set(\"replayUrl\", r.json.url); return; }",
+                  "    if (r.json.state === \"failed\" || r.json.state === \"none\") return;",
+                  "    await sleep(2000);",
+                  "  }",
+                  "})();"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "const set = (k, v) => pm.collectionVariables.set(k, v);",
+                  "const get = (k) => pm.collectionVariables.get(k);",
+                  "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
+                  "const call = (method, path, opts = {}) => new Promise((resolve, reject) => {",
+                  "  const header = {};",
+                  "  if (!opts.anonymous) header.Authorization = \"Bearer \" + (opts.token || get(\"token\"));",
+                  "  if (opts.json !== undefined) header[\"Content-Type\"] = \"application/json\";",
+                  "  if (opts.contentType) header[\"Content-Type\"] = opts.contentType;",
+                  "  const req = { url: pm.variables.replaceIn(\"{{baseUrl}}/api\" + path), method, header };",
+                  "  if (opts.json !== undefined) req.body = { mode: \"raw\", raw: JSON.stringify(opts.json) };",
+                  "  if (opts.raw !== undefined) req.body = { mode: \"raw\", raw: opts.raw };",
+                  "  pm.sendRequest(req, (err, res) => {",
+                  "    if (err) return reject(err);",
+                  "    let json = {}; try { json = res.json(); } catch (e) { /* no body */ }",
+                  "    resolve({ code: res.code, json });",
+                  "  });",
+                  "});",
+                  "const waitForJob = async (jobId, token) => {",
+                  "  for (let i = 0; i < 400; i++) {",
+                  "    const r = await call(\"GET\", \"/jobs/\" + jobId, { token });",
+                  "    if (r.json.state === \"done\" || r.json.state === \"failed\") return r.json;",
+                  "    await sleep(2000);",
+                  "  }",
+                  "  return { state: \"timeout\" };",
+                  "};",
+                  "if (!get(\"replayUrl\")) { pm.test.skip(\"The replay is not ready: no link\"); } else {",
+                  "pm.test(\"Partial content for a Range request\", () => pm.expect([200, 206]).to.include(pm.response.code));",
+                  "pm.test(\"Is video or audio\", () => pm.expect(pm.response.headers.get(\"Content-Type\")).to.match(/video\\/mp4|audio\\/mp4/));",
+                  "}"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
       "name": "Live Recording",
       "description": "Used by the browser extension: the lecture is sent in pieces while it is recorded.",
       "item": [
@@ -2874,6 +3167,63 @@
       "name": "Account",
       "description": "",
       "item": [
+        {
+          "name": "Get Storage Usage",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/auth/usage",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "auth",
+                "usage"
+              ]
+            },
+            "description": "How much of the account's storage is used (recordings kept for replay, slides) and the limit.\n\n**Authentication:** Bearer token\n\n**Responses**\n- `200` `{used_bytes, limit_bytes}`"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "const set = (k, v) => pm.collectionVariables.set(k, v);",
+                  "const get = (k) => pm.collectionVariables.get(k);",
+                  "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
+                  "const call = (method, path, opts = {}) => new Promise((resolve, reject) => {",
+                  "  const header = {};",
+                  "  if (!opts.anonymous) header.Authorization = \"Bearer \" + (opts.token || get(\"token\"));",
+                  "  if (opts.json !== undefined) header[\"Content-Type\"] = \"application/json\";",
+                  "  if (opts.contentType) header[\"Content-Type\"] = opts.contentType;",
+                  "  const req = { url: pm.variables.replaceIn(\"{{baseUrl}}/api\" + path), method, header };",
+                  "  if (opts.json !== undefined) req.body = { mode: \"raw\", raw: JSON.stringify(opts.json) };",
+                  "  if (opts.raw !== undefined) req.body = { mode: \"raw\", raw: opts.raw };",
+                  "  pm.sendRequest(req, (err, res) => {",
+                  "    if (err) return reject(err);",
+                  "    let json = {}; try { json = res.json(); } catch (e) { /* no body */ }",
+                  "    resolve({ code: res.code, json });",
+                  "  });",
+                  "});",
+                  "const waitForJob = async (jobId, token) => {",
+                  "  for (let i = 0; i < 400; i++) {",
+                  "    const r = await call(\"GET\", \"/jobs/\" + jobId, { token });",
+                  "    if (r.json.state === \"done\" || r.json.state === \"failed\") return r.json;",
+                  "    await sleep(2000);",
+                  "  }",
+                  "  return { state: \"timeout\" };",
+                  "};",
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Has used and limit\", () => pm.expect(body()).to.include.all.keys(\"used_bytes\", \"limit_bytes\"));"
+                ]
+              }
+            }
+          ]
+        },
         {
           "name": "Delete Account",
           "request": {

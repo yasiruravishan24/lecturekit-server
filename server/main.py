@@ -3,6 +3,7 @@
 Run (from the server/ folder):  uvicorn server.main:app --host 0.0.0.0 --port 8000 --workers 1
 One worker process only: a second one would break the single job queue."""
 import logging
+import re
 import threading
 from contextlib import asynccontextmanager
 
@@ -18,7 +19,7 @@ from . import errors
 from .db import make_session_factory
 from .daily_log import setup_daily_logs
 from .mail import make_mailer
-from .routes import auth, courses, health, live, results, uploads
+from .routes import auth, courses, health, live, media, results, uploads
 from .security import LoginGuard
 from .settings import Settings
 from .worker import Worker
@@ -88,11 +89,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"error": {"code": "too_large", "message": f"File too large (limit {biggest // 1024 // 1024} MB)"}},
                                 status_code=413)
         response = await call_next(request)
-        logger.info("%s %s %s user=%s", request.method, request.url.path, response.status_code,
+        logger.info("%s %s %s user=%s", request.method, re.sub(r"/media/[^/?]+", "/media/...", request.url.path), response.status_code,
                     getattr(request.state, "user_id", "-"))            # no bodies, no tokens
         return response
 
-    for module in (auth, courses, uploads, live, results, health):
+    for module in (auth, courses, uploads, live, results, media, health):
         app.include_router(module.router, prefix=prefix)
     if prefix:
         app.include_router(health.router)                 # /health also at the root, for monitoring and Caddy

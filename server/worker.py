@@ -1,4 +1,6 @@
-"""One worker thread and one FIFO queue: only one heavy job at a time (SERVER_PLAN.md section 8, rule 5).
+"""Two lanes (SERVER_PLAN.md section 8, rule 5, extended): the main lane makes notes and quiz, one job at a time, first come
+first served. A second lane does the extra work that follows a finished lecture (the pictures of the board and screen,
+then the replay with blurred faces) at a low CPU priority, so it can never hold up anyone's notes.
 
 Every unit of work is a `job` row first, then a queue entry. lecturekit is called outside any open database
 transaction; the database is only touched in short sessions before and after the call."""
@@ -17,53 +19,70 @@ from lecturekit.errors import LectureKitError, MissingInputError
 from . import storage
 from .errors import job_error
 from .media import JOINED_NAME, join_recordings
-from .models import Attempt, Job, LectureSession, LiveChunk, Note, Question, utcnow
+from .models import Attempt, Job, LectureSession, LiveChunk, Note, Question, Shot, utcnow
 from .settings import Settings
 
 logger = logging.getLogger("lecturekit.server")
 PROGRESS_EVERY = 1.0            # seconds: at most one progress write per second per job
+BACKGROUND = ("visuals", "replay")                              # the second lane
+AUDIO_TYPES = {".m4a", ".mp3", ".wav", ".aac", ".ogg"}
 
 
 class Worker:
     def __init__(self, settings: Settings, session_factory):
         self.settings, self.sf = settings, session_factory
-        self.q: "queue.Queue[int | None]" = queue.Queue()
+        self.q: "queue.Queue[int | None]" = queue.Queue()            # main lane: notes and quiz
+        self.bg_q: "queue.Queue[int | None]" = queue.Queue()         # background lane: pictures, replay
         self.thread: threading.Thread | None = None
+        self.bg_thread: threading.Thread | None = None
         self._running = False
+        self._bg_running = False
+        self._resume: list[int] = []                                  # background jobs of the last run, queued again at start
 
     # ---- lifecycle ---------------------------------------------------------------------------
     def start(self) -> None:
         if self.thread is None:
-            self.thread = threading.Thread(target=self._loop, name="lecturekit-worker", daemon=True)
+            self.thread = threading.Thread(target=self._loop, args=(self.q, False), name="lecturekit-worker", daemon=True)
             self.thread.start()
+            self.bg_thread = threading.Thread(target=self._loop, args=(self.bg_q, True), name="lecturekit-background", daemon=True)
+            self.bg_thread.start()
+            for job_id in self._resume:
+                self.submit(job_id, background=True)
+            self._resume = []
 
     def stop(self) -> None:
-        if self.thread is not None:
-            self.q.put(None)
-            self.thread.join(timeout=5)
-            self.thread = None
+        for q_, th in ((self.q, self.thread), (self.bg_q, self.bg_thread)):
+            if th is not None:
+                q_.put(None)
+                th.join(timeout=5)
+        self.thread = self.bg_thread = None
 
-    def submit(self, job_id: int) -> None:
-        self.q.put(job_id)
+    def submit(self, job_id: int, background: bool = False) -> None:
+        (self.bg_q if background else self.q).put(job_id)
 
     def queue_length(self) -> int:
+        """Jobs of the main lane (waiting and running): what a person waiting for notes is behind."""
         return self.q.qsize() + (1 if self._running else 0)
 
-    def _loop(self) -> None:
+    def background_length(self) -> int:
+        return self.bg_q.qsize() + (1 if self._bg_running else 0)
+
+    def _loop(self, q_: "queue.Queue[int | None]", background: bool) -> None:
         while True:
             try:
-                job_id = self.q.get(timeout=self.settings.housekeeping_seconds)
+                job_id = q_.get(timeout=self.settings.housekeeping_seconds)
             except queue.Empty:
-                self._safely(self.housekeeping)
+                if not background:
+                    self._safely(self.housekeeping)
                 continue
             try:
                 if job_id is None:
                     return
-                self._running = True
+                setattr(self, "_bg_running" if background else "_running", True)
                 self._safely(self.run_job, job_id)
             finally:
-                self._running = False
-                self.q.task_done()
+                setattr(self, "_bg_running" if background else "_running", False)
+                q_.task_done()
 
     @staticmethod
     def _safely(fn, *args) -> None:
@@ -106,14 +125,24 @@ class Worker:
                 return None
             if job.kind in ("process", "finish"):
                 session.state = "processing"
+            elif job.kind == "visuals":
+                session.visuals_state = "processing"
+            elif job.kind == "replay":
+                session.replay_state = "processing"
             sdir = storage.session_dir(self.settings, session.user_id, session.id)
             updir = storage.upload_dir(sdir)
-            recordings = [updir / f.stored_name for f in session.files if f.kind == "recording"]
+            recordings = [updir / f.stored_name for f in session.files if f.kind == "recording" and not f.removed]
+            if not recordings and (replay := storage.find_replay(sdir)) is not None:
+                recordings = [replay]                                # the original is gone: the replay has the same sound
+            note = db.scalar(select(Note).where(Note.session_id == session.id))
             info = {"job_id": job.id, "kind": job.kind, "arg": job.arg, "session_id": session.id,
                     "user_id": session.user_id, "title": session.title, "sdir": sdir, "recordings": recordings,
                     "slides": [updir / f.stored_name for f in session.files if f.kind == "slides"],
                     "chunk_seconds": session.live.chunk_seconds if session.live else None,
-                    "overlap": session.live.overlap if session.live else None}
+                    "overlap": session.live.overlap if session.live else None,
+                    "config": session.config, "source": session.source,
+                    "notes": ({"title": note.title, "full_notes": json.loads(note.full_notes_json),
+                               "short_notes": json.loads(note.short_notes_json)} if note is not None else None)}
             if job.kind == "chunk":
                 info["chunk_file"] = next(iter(sorted(updir.glob(f"chunk_{job.arg:05d}.*"))), None)
             db.commit()
@@ -122,6 +151,8 @@ class Worker:
     def _execute(self, info: dict) -> dict:
         kind, cb = info["kind"], self._progress(info["job_id"])
         slides = info["slides"] or None
+        if kind in BACKGROUND:
+            return self._execute_background(info, cb)
         if kind == "process":
             recording = info["recordings"][0] if info["recordings"] else None
             if len(info["recordings"]) > 1:                      # a lecture saved in several files: one recording for the pipeline
@@ -136,6 +167,27 @@ class Worker:
                                 info["overlap"], title=info["title"])
         return lk.finish_chunked_session(info["sdir"], info["arg"], slides=slides, chunk_seconds=info["chunk_seconds"],
                                          overlap=info["overlap"], final=True, on_progress=cb)
+
+    def _execute_background(self, info: dict, cb) -> dict:
+        """The extra work after a lecture. Needs one recording file (a lecture saved in several files only gets a replay of its sound)."""
+        sdir, recordings = info["sdir"], info["recordings"]
+        if not recordings or not recordings[0].exists():
+            raise MissingInputError("the recording is no longer on the server")
+        if info["kind"] == "visuals":
+            video = recordings[0]
+            if len(recordings) != 1 or video.suffix.lower() in AUDIO_TYPES:
+                return {"shots": [], "notes": None}              # no picture to look at
+            found = lk.extract_visuals(video, sdir, final=True, on_progress=lambda stage, pct: cb(stage, pct, ""))
+            merged = None
+            if found["shots"] and info["notes"]:
+                cb("merge", 93, "")
+                merged = lk.refine_notes_with_visuals(sdir, info["notes"], final=True, config_name=info["config"])
+            return {"shots": found["shots"], "notes": merged}
+        source = recordings[0]
+        if len(recordings) > 1:                                  # several parts: the sound only (joined earlier)
+            joined = storage.upload_dir(sdir) / JOINED_NAME
+            source = joined if joined.exists() else join_recordings(recordings, joined)
+        return lk.make_replay(source, storage.replay_dir(sdir), on_progress=lambda pct: cb("replay", pct, ""))
 
     def _progress(self, job_id: int):
         """lecturekit's on_progress(stage, percent, message) -> job row, throttled to one write per second."""
@@ -164,11 +216,81 @@ class Worker:
                 if row is not None:
                     row.state, row.seconds, row.error_message = "transcribed", result.get("seconds"), None
                 job.stage, job.percent, job.message = "done", 100, ""
+            elif session is not None and info["kind"] == "visuals":
+                self._store_visuals(db, session, result)
+                job.stage, job.percent, job.message = "done", 100, ""
+            elif session is not None and info["kind"] == "replay":
+                self._store_replay(db, session, result, info)
+                job.stage, job.percent, job.message = "done", 100, ""
             elif session is not None:
                 self._store_result(db, session, result)
                 job.stage, job.percent, job.message = "done", 100, "finished"
             job.state, job.finished_at = "done", utcnow()
+            follow = None
+            if session is not None and info["kind"] in ("process", "finish"):
+                follow = self._start_background(db, session)
+            elif session is not None and info["kind"] == "visuals":
+                follow = self._enqueue(db, session, "replay")
             db.commit()
+        if follow is not None:
+            self.submit(follow, background=True)
+
+    # ---- the lane for extra work ------------------------------------------------------------------
+    @staticmethod
+    def _enqueue(db, session: LectureSession, kind: str) -> int:
+        job = Job(session_id=session.id, user_id=session.user_id, kind=kind)
+        db.add(job)
+        if kind == "visuals":
+            session.visuals_state = "queued"
+        else:
+            session.replay_state = "queued"
+        db.flush()
+        return job.id
+
+    def _start_background(self, db, session: LectureSession) -> int | None:
+        """After the notes: the first extra job (pictures; the replay follows by itself). None when this lecture has no recording file."""
+        if not self.settings.visuals_enabled or session.source != "upload":
+            return None
+        if not any(f.kind == "recording" and not f.removed for f in session.files):
+            return None
+        return self._enqueue(db, session, "visuals")
+
+    def start_background(self, db, session: LectureSession) -> int | None:
+        """Used by the route that makes the replay on request: queue the extra work now. Returns the first job's id."""
+        job_id = self._enqueue(db, session, "visuals")
+        db.commit()
+        self.submit(job_id, background=True)
+        return job_id
+
+    @staticmethod
+    def _store_visuals(db, session: LectureSession, result: dict) -> None:
+        for old in db.scalars(select(Shot).where(Shot.session_id == session.id)).all():
+            db.delete(old)
+        db.flush()
+        for s in result["shots"]:
+            db.add(Shot(session_id=session.id, t=float(s["t"]), kind=s["kind"], text=s["text"], description=s["description"], file=s["file"]))
+        session.shot_count, session.visuals_state = len(result["shots"]), "done"
+        merged = result.get("notes")
+        note = db.scalar(select(Note).where(Note.session_id == session.id))
+        if merged and note is not None:
+            note.title = merged.get("title", note.title)
+            note.full_notes_json = json.dumps(merged.get("full_notes", []))
+            note.short_notes_json = json.dumps(merged.get("short_notes", []))
+            stats = json.loads(note.stats_json or "{}")
+            stats["visuals"] = len(result["shots"])
+            note.stats_json = json.dumps(stats)
+
+    def _store_replay(self, db, session: LectureSession, result: dict, info: dict) -> None:
+        """The replay exists: keep it, and delete the unblurred original (and the copies made for the pipeline)."""
+        session.replay_state, session.replay_kind, session.replay_bytes = "ready", result["kind"], int(result["bytes"])
+        sdir = info["sdir"]
+        for f in session.files:
+            if f.kind == "recording" and not f.removed:
+                storage.remove_file(storage.upload_dir(sdir) / f.stored_name)
+                f.removed, f.bytes = True, 0
+        storage.remove_file(storage.upload_dir(sdir) / JOINED_NAME)
+        for media in sdir.glob("media.*"):
+            media.unlink(missing_ok=True)
 
     @staticmethod
     def _store_result(db, session: LectureSession, result: dict) -> None:
@@ -194,20 +316,32 @@ class Worker:
             session = db.get(LectureSession, info["session_id"])
             if job is not None:
                 job.state, job.finished_at, job.error_code, job.error_message = "failed", utcnow(), code, message
+            follow = None
             if session is not None:
                 if info["kind"] == "chunk":
                     row = db.scalar(select(LiveChunk).where(LiveChunk.live_id == session.live.id, LiveChunk.idx == info["arg"]))
                     if row is not None:
                         row.state, row.error_message = "failed", message
+                elif info["kind"] == "visuals":
+                    session.visuals_state = "failed"                 # the notes stay as they were; the replay still gets made
+                    follow = self._enqueue(db, session, "replay")
+                elif info["kind"] == "replay":
+                    session.replay_state = "failed"                  # the original stays, so it can be tried again
                 else:
                     session.state = "failed"
             db.commit()
+        if follow is not None:
+            self.submit(follow, background=True)
 
     # ---- startup recovery and housekeeping -----------------------------------------------------
     def recover(self) -> int:
         """Jobs left `queued` or `processing` by a previous run are failed: the user retries (SERVER_PLAN.md NF3)."""
         with self.sf() as db:
             stale = db.scalars(select(Job).where(Job.state.in_(("queued", "processing")))).all()
+            for job in [j for j in stale if j.kind in BACKGROUND]:     # extra work is simply started again
+                job.state, job.stage, job.percent = "queued", "queued", 0
+                self._resume.append(job.id)
+            stale = [j for j in stale if j.kind not in BACKGROUND]
             for job in stale:
                 job.state, job.finished_at = "failed", utcnow()
                 job.error_code, job.error_message = "server_restarted", "The server restarted; please try again"
@@ -224,13 +358,14 @@ class Worker:
             return len(stale)
 
     def housekeeping(self) -> int:
-        """Remove the large files of lectures finished more than KEEP_MEDIA_DAYS ago.
+        """Remove the large files of lectures finished more than KEEP_MEDIA_DAYS ago, but only for lectures that have no replay
+        (older ones, and live recordings): a replay is kept until its owner deletes the lecture.
 
         Notes, quiz and transcript stay. Returns how many sessions were cleaned."""
         cutoff = utcnow() - timedelta(days=self.settings.keep_media_days)
         cleaned = 0
         with self.sf() as db:
-            for session in db.scalars(select(LectureSession).where(LectureSession.state == "done")).all():
+            for session in db.scalars(select(LectureSession).where(LectureSession.state == "done", LectureSession.replay_state == "none")).all():
                 last = db.scalar(select(Job.finished_at).where(
                     Job.session_id == session.id, Job.kind.in_(("process", "finish")), Job.state == "done")
                     .order_by(Job.id.desc()).limit(1))

@@ -34,6 +34,7 @@ def session_out(db: Session, s: LectureSession) -> dict:
     latest = db.scalar(select(Job).where(Job.session_id == s.id).order_by(Job.id.desc()).limit(1))
     return {"id": s.id, "module_id": s.module_id, "title": s.title, "state": s.state, "source": s.source,
             "has_slides": s.has_slides, "config": s.config, "created_at": iso(s.created_at),
-            "files": [{"id": f.id, "kind": f.kind, "original_name": f.original_name, "bytes": f.bytes} for f in s.files],
+            "files": [{"id": f.id, "kind": f.kind, "original_name": f.original_name, "bytes": f.bytes, "removed": f.removed} for f in s.files],
             "latest_job": job_out(latest) if latest else None,
-            "has_notes": s.note is not None and s.state == "done", "duration_seconds": _duration(s)}
+            "has_notes": s.note is not None and s.state == "done", "duration_seconds": _duration(s),
+            "replay_state": s.replay_state, "replay_kind": s.replay_kind, "visuals_state": s.visuals_state, "shot_count": s.shot_count}

@@ -24,8 +24,21 @@ def make_session_factory(settings: Settings) -> sessionmaker:
     return sessionmaker(engine, expire_on_commit=False)
 
 
+def _add_missing_columns(engine, table: str, wanted: dict[str, str]) -> set[str]:
+    """Add the columns an older database does not have yet. Returns the names that were added."""
+    have = {c["name"] for c in inspect(engine).get_columns(table)}
+    added = {name for name in wanted if name not in have}
+    with engine.begin() as conn:
+        for name in added:
+            conn.execute(text(f'ALTER TABLE "{table}" ADD COLUMN {name} {wanted[name]}'))
+    return added
+
+
 def _add_new_user_columns(engine) -> None:
     """A database made before sign-up details existed gets the new columns; its accounts count as verified."""
+    _add_missing_columns(engine, "session", {"visuals_state": "VARCHAR(10) NOT NULL DEFAULT 'none'", "replay_state": "VARCHAR(10) NOT NULL DEFAULT 'none'",
+                                             "replay_kind": "VARCHAR(5)", "replay_bytes": "INTEGER NOT NULL DEFAULT 0", "shot_count": "INTEGER NOT NULL DEFAULT 0"})
+    _add_missing_columns(engine, "media_file", {"removed": "BOOLEAN NOT NULL DEFAULT 0"})
     columns = {c["name"] for c in inspect(engine).get_columns("user")}
     added = {"full_name": "VARCHAR(120) NOT NULL DEFAULT ''", "email_verified": "BOOLEAN NOT NULL DEFAULT 0",
              "google_sub": "VARCHAR(64)", "terms_accepted_at": "DATETIME",

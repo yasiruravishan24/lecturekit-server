@@ -34,6 +34,9 @@ class Settings:
     preload_whisper: bool = True
     housekeeping_seconds: int = 3600
     log_retention_days: int = 14
+    visuals_enabled: bool = True             # background work after the notes: board and screen pictures, replay with blurred faces
+    max_storage_gb: int = 10                 # per user: recordings kept for replay, slides, screenshots
+    media_link_minutes: int = 120            # how long a signed link to a replay or screenshot works
     web_dist: Path | None = None
     smtp_host: str = ""                      # empty: emails are written to the server log instead of sent
     smtp_port: int = 587
@@ -61,6 +64,9 @@ class Settings:
             web_origin=os.getenv("WEB_ORIGIN", ""),
             extension_origin=os.getenv("EXTENSION_ORIGIN", ""),
             log_retention_days=_int("LOG_RETENTION_DAYS", 14),
+            visuals_enabled=os.getenv("VISUALS_ENABLED", "1") != "0",
+            max_storage_gb=_int("MAX_STORAGE_GB", 10),
+            media_link_minutes=_int("MEDIA_LINK_MINUTES", 120),
             web_dist=Path(web_dist) if web_dist else None,
             smtp_host=os.getenv("SMTP_HOST", ""),
             smtp_port=_int("SMTP_PORT", 587),

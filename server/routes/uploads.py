@@ -9,8 +9,9 @@ from .. import storage
 from ..access import own_session
 from ..db import get_db
 from ..errors import ApiError, conflict, unprocessable
-from ..jobs import active, enqueue
+from ..jobs import active, background_busy, enqueue
 from ..media import JOINED_NAME
+from .media import storage_used
 from ..models import LectureSession, MediaFile, User
 from ..validation import Id
 from ..security import current_user
@@ -57,9 +58,15 @@ def commit_files(db: Session, session: LectureSession, sdir, staged, live: bool 
     part_no = 0
     if any(s[0] == "recording" for s in staged):                  # new recordings replace all the old ones
         for old in [f for f in session.files if f.kind == "recording"]:
-            storage.remove_file(updir / old.stored_name)
+            if not old.removed:
+                storage.remove_file(updir / old.stored_name)
             session.files.remove(old)
         storage.remove_file(updir / JOINED_NAME)
+        storage.remove_tree(storage.replay_dir(sdir))                    # everything made from the old recording goes
+        storage.remove_tree(storage.shots_dir(sdir))
+        session.shots.clear()
+        session.visuals_state = session.replay_state = "none"
+        session.replay_kind, session.replay_bytes, session.shot_count = None, 0, 0
     for kind, original, tmp, ext, size in staged:
         if kind == "recording":
             part_no += 1
@@ -82,9 +89,15 @@ def upload(session_id: Id, request: Request, recording: list[UploadFile] = File(
     session = own_session(db, user, session_id)
     if active(session):
         raise conflict("This lecture is being processed; wait until it has finished", "busy")
+    if background_busy(session):
+        raise conflict("The pictures and replay of this lecture are still being made; try again in a few minutes", "busy")
     if session.source == "live":
         raise conflict("This lecture is recorded live; send chunks instead", "live_session")
-    sdir = storage.session_dir(request.app.state.settings, user.id, session.id)
+    settings = request.app.state.settings
+    incoming = int(request.headers.get("content-length") or 0)
+    if storage_used(db, user.id) + incoming > settings.max_storage_gb * 1024 ** 3:
+        raise ApiError(413, "storage_full", f"Your storage is full ({settings.max_storage_gb} GB). Delete a lecture you no longer need and try again")
+    sdir = storage.session_dir(settings, user.id, session.id)
     staged = stage_files(request, sdir, recording, slides)
     if not staged:
         raise unprocessable("Send a recording or slides", "missing_input")
@@ -96,6 +109,8 @@ def upload(session_id: Id, request: Request, recording: list[UploadFile] = File(
 def _start(request: Request, db: Session, user: User, session: LectureSession) -> dict:
     if active(session):
         raise conflict("This lecture is already queued or being processed", "busy")
+    if background_busy(session):
+        raise conflict("The pictures and replay of this lecture are still being made; try again in a few minutes", "busy")
     if session.source == "live":
         if session.live is None or session.live.total is None:
             raise conflict("Finish the live recording first", "not_finished")

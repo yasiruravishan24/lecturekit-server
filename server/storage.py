@@ -20,6 +20,22 @@ def upload_dir(sdir: Path) -> Path:
     return sdir / "upload"
 
 
+def replay_dir(sdir: Path) -> Path:
+    return sdir / "replay"
+
+
+def shots_dir(sdir: Path) -> Path:
+    return sdir / "shots"
+
+
+def find_replay(sdir: Path) -> Path | None:
+    for name in ("replay.mp4", "replay.m4a"):
+        f = replay_dir(sdir) / name
+        if f.exists():
+            return f
+    return None
+
+
 def check_extension(filename: str | None, allowed: set[str], what: str) -> str:
     ext = Path(filename or "").suffix.lower()
     if ext not in allowed:
