@@ -150,7 +150,7 @@ def run(a) -> int:
     r = api("POST", "/auth/register", json=register_body(email))
     check("register the same email again -> 409 email_taken", r.status_code == 409 and err(r)[0] == "email_taken", r.text[:100])
     r = api("GET", "/auth/config")
-    check("GET /auth/config tells whether Google login is on", r.status_code == 200 and set(r.json()) == {"google_enabled", "google_client_id"}, r.text[:100])
+    check("GET /auth/config tells whether Google login is on", r.status_code == 200 and set(r.json()) == {"google_enabled", "google_client_id", "limits"}, r.text[:100])
     r = api("POST", "/auth/google", json={"id_token": "not-a-real-token", "accept_terms": True})
     check("a fake Google token is refused (401 google_invalid, or 503 when Google login is off)", r.status_code in (401, 503) and err(r)[0] in ("google_invalid", "google_disabled"), r.text[:100])
     bad = api("POST", "/auth/login", json={"email": email, "password": "a wrong password"})

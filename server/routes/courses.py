@@ -1,5 +1,5 @@
 """Courses, modules and sessions: CRUD with ownership checks (SERVER_PLAN.md section 7)."""
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -110,6 +110,15 @@ def delete_module(module_id: Id, request: Request, user: User = Depends(current_
 
 
 # ---- sessions ------------------------------------------------------------------------------------
+
+@router.get("/sessions")
+def recent_sessions(limit: int = Query(5, ge=1, le=50), user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """The user's newest lectures across all courses, with the names of their module and course (for the dashboard)."""
+    rows = db.execute(select(LectureSession, Module, Course).join(Module, LectureSession.module_id == Module.id)
+                      .join(Course, Module.course_id == Course.id).where(LectureSession.user_id == user.id)
+                      .order_by(LectureSession.id.desc()).limit(limit)).all()
+    return [{**session_out(db, s), "course_id": c.id, "course_name": c.name, "module_name": m.name} for s, m, c in rows]
+
 
 @router.get("/modules/{module_id}/sessions")
 def list_sessions(module_id: Id, user: User = Depends(current_user), db: Session = Depends(get_db)):

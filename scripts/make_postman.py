@@ -125,9 +125,9 @@ def build():
 
     credentials = {"email": "{{userEmail}}", "password": "{{password}}"}
     auth = group("Auth", [
-        request("Get Auth Config", "GET", "/api/auth/config", doc("What a client needs before login: whether Google sign-in is switched on, and the Google client ID to use.", "none",
-                responses=[(200, "`{google_enabled, google_client_id}`")]),
-                status(200) + '\npm.test("Has google_enabled and google_client_id", () => pm.expect(body()).to.have.all.keys("google_enabled", "google_client_id"));', auth="none"),
+        request("Get Auth Config", "GET", "/api/auth/config", doc("What a client needs before login: whether Google sign-in is switched on, the Google client ID to use, and the server limits (lectures per day, upload sizes, days recordings are kept).", "none",
+                responses=[(200, "`{google_enabled, google_client_id, limits}`")]),
+                status(200) + '\npm.test("Has google_enabled, google_client_id and limits", () => pm.expect(body()).to.include.all.keys("google_enabled", "google_client_id", "limits"));', auth="none"),
         request("Register", "POST", "/api/auth/register", doc(
             "Creates an account and emails a 6-digit code (valid 10 minutes). The account cannot log in until the code is confirmed with Verify Email. The email is stored in lower case. "
             "Registering again with an address that is still unconfirmed replaces the name and password and sends a new email. "
@@ -201,12 +201,16 @@ def build():
     sessions = group("Sessions", [
         request("List Sessions", "GET", "/api/modules/{{moduleId}}/sessions", doc("The lectures (sessions) of a module with their state.", params="`module_id` in the path",
                 responses=[(200, "`[Session]`, see Get Session"), (404, "not found")]), status(200) + '\npm.test("Is a list", () => pm.expect(body()).to.be.an("array"));'),
+        request("List Recent Sessions", "GET", "/api/sessions", doc("The newest lectures across all courses, with the names of their module and course (for a dashboard).",
+                params="query `limit` (1 to 50, default 5)", responses=[(200, "`[Session + {course_id, course_name, module_name}]`, newest first"), (422, "`validation`: limit out of range")]),
+                status(200) + '\npm.test("Is a list with course and module names", () => { pm.expect(body()).to.be.an("array"); if (body().length) pm.expect(body()[0]).to.include.all.keys("course_name", "module_name"); });',
+                query=[("limit", "5", "how many lectures, 1 to 50")]),
         request("Create Session", "POST", "/api/modules/{{moduleId}}/sessions", doc("Creates an empty lecture. Upload a recording next, or open a live recording.", params="`module_id` in the path",
                 body="`title` (1 to 160 characters)", responses=[(201, "the session, state `empty`"), (404, "module not found"), (422, "`validation`")]),
                 status(201) + '\npm.test("Starts empty", () => pm.expect(body().state).to.eql("empty"));\nset("sessionId", body().id);', json_body={"title": "Lecture 2: Strings"}),
         request("Get Session", "GET", "/api/sessions/{{sessionId}}", doc(
             "One lecture. `state` is `empty`, `uploaded`, `live`, `queued`, `processing`, `done` or `failed`. `latest_job` is the most recent job; `has_notes` is true when notes exist.",
-            params="`session_id` in the path", responses=[(200, "`{id, module_id, title, state, source, has_slides, config, created_at, files, latest_job, has_notes}`"), (404, "not found, or not yours")]),
+            params="`session_id` in the path", responses=[(200, "`{id, module_id, title, state, source, has_slides, config, created_at, files, latest_job, has_notes, duration_seconds}`"), (404, "not found, or not yours")]),
             status(200) + '\npm.test("Has a state", () => pm.expect(body().state).to.be.a("string"));'),
         request("Update Session", "PATCH", "/api/sessions/{{sessionId}}", doc("Renames a lecture.", params="`session_id` in the path", body="`title`", responses=[(200, "the session"), (404, "not found"), (422, "`validation`")]),
                 status(200) + '\npm.test("Is renamed", () => pm.expect(body().title).to.eql("Lecture 2: Strings and Input"));', json_body={"title": "Lecture 2: Strings and Input"}),

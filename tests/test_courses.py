@@ -106,3 +106,26 @@ def test_cannot_delete_while_a_lecture_is_processing(client, app):
         db.commit()
     r = client.delete("/auth/me", headers=h)
     assert r.status_code == 409 and r.json()["error"]["code"] == "busy"
+
+
+def test_recent_sessions_across_courses_with_names_and_duration(client, fake_lk):
+    from tests.conftest import file_part, wait_job
+    a, b = new_user(client), new_user(client, "b@example.com")
+    c1 = client.post("/courses", json={"name": "CS"}, headers=a).json()["id"]
+    c2 = client.post("/courses", json={"name": "Maths"}, headers=a).json()["id"]
+    m1 = client.post(f"/courses/{c1}/modules", json={"name": "Week 1"}, headers=a).json()["id"]
+    m2 = client.post(f"/courses/{c2}/modules", json={"name": "Algebra"}, headers=a).json()["id"]
+    ids = [client.post(f"/modules/{m}/sessions", json={"title": f"L{i}"}, headers=a).json()["id"] for i, m in enumerate([m1, m2, m1, m2, m1, m2, m1])]
+    other = make_session(client, b, "Not mine")
+    got = client.get("/sessions", headers=a).json()
+    assert [s["id"] for s in got] == ids[::-1][:5]                                  # newest first, default 5
+    assert got[0]["course_name"] == "CS" and got[0]["module_name"] == "Week 1" and got[1]["course_name"] == "Maths"
+    assert other not in [s["id"] for s in client.get("/sessions?limit=50", headers=a).json()]
+    assert len(client.get("/sessions?limit=2", headers=a).json()) == 2
+    for bad in ("0", "51", "x", "-1"):
+        assert client.get(f"/sessions?limit={bad}", headers=a).status_code == 422
+    assert client.get("/sessions").status_code == 401
+    assert got[0]["duration_seconds"] is None                                         # no notes yet
+    client.post(f"/sessions/{ids[-1]}/upload", headers=a, files=[("recording", file_part("a.mp4"))])
+    wait_job(client, a, client.post(f"/sessions/{ids[-1]}/process", headers=a).json()["job_id"])
+    assert client.get(f"/sessions/{ids[-1]}", headers=a).json()["duration_seconds"] == 1.0         # the fake pipeline reports 1.0 s

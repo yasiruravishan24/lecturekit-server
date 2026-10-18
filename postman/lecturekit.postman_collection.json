@@ -360,7 +360,7 @@
                 "config"
               ]
             },
-            "description": "What a client needs before login: whether Google sign-in is switched on, and the Google client ID to use.\n\n**Authentication:** none\n\n**Responses**\n- `200` `{google_enabled, google_client_id}`",
+            "description": "What a client needs before login: whether Google sign-in is switched on, the Google client ID to use, and the server limits (lectures per day, upload sizes, days recordings are kept).\n\n**Authentication:** none\n\n**Responses**\n- `200` `{google_enabled, google_client_id, limits}`",
             "auth": {
               "type": "noauth"
             }
@@ -398,7 +398,7 @@
                   "  return { state: \"timeout\" };",
                   "};",
                   "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
-                  "pm.test(\"Has google_enabled and google_client_id\", () => pm.expect(body()).to.have.all.keys(\"google_enabled\", \"google_client_id\"));"
+                  "pm.test(\"Has google_enabled, google_client_id and limits\", () => pm.expect(body()).to.include.all.keys(\"google_enabled\", \"google_client_id\", \"limits\"));"
                 ]
               }
             }
@@ -1528,6 +1528,69 @@
           ]
         },
         {
+          "name": "List Recent Sessions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/sessions?limit=5",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "sessions"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "5",
+                  "description": "how many lectures, 1 to 50"
+                }
+              ]
+            },
+            "description": "The newest lectures across all courses, with the names of their module and course (for a dashboard).\n\n**Authentication:** Bearer token\n\n**Parameters:** query `limit` (1 to 50, default 5)\n\n**Responses**\n- `200` `[Session + {course_id, course_name, module_name}]`, newest first\n- `422` `validation`: limit out of range"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const body = () => { try { return pm.response.json(); } catch (e) { return {}; } };",
+                  "const set = (k, v) => pm.collectionVariables.set(k, v);",
+                  "const get = (k) => pm.collectionVariables.get(k);",
+                  "const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));",
+                  "const call = (method, path, opts = {}) => new Promise((resolve, reject) => {",
+                  "  const header = {};",
+                  "  if (!opts.anonymous) header.Authorization = \"Bearer \" + (opts.token || get(\"token\"));",
+                  "  if (opts.json !== undefined) header[\"Content-Type\"] = \"application/json\";",
+                  "  if (opts.contentType) header[\"Content-Type\"] = opts.contentType;",
+                  "  const req = { url: pm.variables.replaceIn(\"{{baseUrl}}/api\" + path), method, header };",
+                  "  if (opts.json !== undefined) req.body = { mode: \"raw\", raw: JSON.stringify(opts.json) };",
+                  "  if (opts.raw !== undefined) req.body = { mode: \"raw\", raw: opts.raw };",
+                  "  pm.sendRequest(req, (err, res) => {",
+                  "    if (err) return reject(err);",
+                  "    let json = {}; try { json = res.json(); } catch (e) { /* no body */ }",
+                  "    resolve({ code: res.code, json });",
+                  "  });",
+                  "});",
+                  "const waitForJob = async (jobId, token) => {",
+                  "  for (let i = 0; i < 400; i++) {",
+                  "    const r = await call(\"GET\", \"/jobs/\" + jobId, { token });",
+                  "    if (r.json.state === \"done\" || r.json.state === \"failed\") return r.json;",
+                  "    await sleep(2000);",
+                  "  }",
+                  "  return { state: \"timeout\" };",
+                  "};",
+                  "pm.test(\"Status is 200\", () => pm.response.to.have.status(200));",
+                  "pm.test(\"Is a list with course and module names\", () => { pm.expect(body()).to.be.an(\"array\"); if (body().length) pm.expect(body()[0]).to.include.all.keys(\"course_name\", \"module_name\"); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Create Session",
           "request": {
             "method": "POST",
@@ -1616,7 +1679,7 @@
                 "{{sessionId}}"
               ]
             },
-            "description": "One lecture. `state` is `empty`, `uploaded`, `live`, `queued`, `processing`, `done` or `failed`. `latest_job` is the most recent job; `has_notes` is true when notes exist.\n\n**Authentication:** Bearer token\n\n**Parameters:** `session_id` in the path\n\n**Responses**\n- `200` `{id, module_id, title, state, source, has_slides, config, created_at, files, latest_job, has_notes}`\n- `404` not found, or not yours"
+            "description": "One lecture. `state` is `empty`, `uploaded`, `live`, `queued`, `processing`, `done` or `failed`. `latest_job` is the most recent job; `has_notes` is true when notes exist.\n\n**Authentication:** Bearer token\n\n**Parameters:** `session_id` in the path\n\n**Responses**\n- `200` `{id, module_id, title, state, source, has_slides, config, created_at, files, latest_job, has_notes, duration_seconds}`\n- `404` not found, or not yours"
           },
           "event": [
             {

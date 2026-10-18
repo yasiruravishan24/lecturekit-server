@@ -42,7 +42,9 @@ def _flush_mail(request: Request, background: BackgroundTasks) -> None:
 def config(request: Request):
     """What a client needs before the user logs in."""
     s = request.app.state.settings
-    return {"google_enabled": bool(s.google_client_id), "google_client_id": s.google_client_id or None}
+    return {"google_enabled": bool(s.google_client_id), "google_client_id": s.google_client_id or None,
+            "limits": {"daily_limit": s.daily_limit, "keep_media_days": s.keep_media_days, "max_recording_mb": s.max_recording_mb,
+                       "max_slides_mb": s.max_slides_mb, "max_recording_parts": s.max_recording_parts}}
 
 
 @router.post("/register", status_code=201)
