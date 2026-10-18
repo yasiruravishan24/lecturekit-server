@@ -15,6 +15,7 @@ from lecturekit import api as lk
 
 from . import errors
 from .db import make_session_factory
+from .daily_log import setup_daily_logs
 from .mail import make_mailer
 from .routes import auth, courses, health, live, results, uploads
 from .security import LoginGuard
@@ -34,6 +35,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         lk.log.setup(quiet=True)                          # lecturekit's log files go to DATA_DIR/logs
+        setup_daily_logs(settings.log_dir, settings.log_retention_days)     # logs/server-DATE.log and logs/error-DATE.log
         recovered = worker.recover()
         if recovered:
             logger.warning("marked %d unfinished job(s) from the last run as failed (server_restarted)", recovered)

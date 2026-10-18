@@ -32,6 +32,7 @@ class Settings:
     bcrypt_rounds: int = 12
     preload_whisper: bool = True
     housekeeping_seconds: int = 3600
+    log_retention_days: int = 14
     web_dist: Path | None = None
     smtp_host: str = ""                      # empty: emails are written to the server log instead of sent
     smtp_port: int = 587
@@ -57,6 +58,7 @@ class Settings:
             keep_media_days=_int("KEEP_MEDIA_DAYS", 7),
             web_origin=os.getenv("WEB_ORIGIN", ""),
             extension_origin=os.getenv("EXTENSION_ORIGIN", ""),
+            log_retention_days=_int("LOG_RETENTION_DAYS", 14),
             web_dist=Path(web_dist) if web_dist else None,
             smtp_host=os.getenv("SMTP_HOST", ""),
             smtp_port=_int("SMTP_PORT", 587),
@@ -75,6 +77,10 @@ class Settings:
     @property
     def db_path(self) -> Path:
         return self.data_dir / "server.db"
+
+    @property
+    def log_dir(self) -> Path:
+        return self.data_dir / "logs"
 
     @property
     def users_dir(self) -> Path:
