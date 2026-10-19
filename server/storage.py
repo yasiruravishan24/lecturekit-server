@@ -9,7 +9,7 @@ from .settings import Settings
 
 BLOCK = 1024 * 1024
 # What lecturekit makes from an upload; removed when a new recording or new slides arrive so nothing stale is reused.
-DERIVED = ("transcript.json", "slides.json", "slides.pdf", "meta.json")
+DERIVED = ("transcript.json", "slides.json", "slides.pdf", "meta.json", "deeper.json")
 
 
 def session_dir(settings: Settings, user_id: int, session_id: int) -> Path:

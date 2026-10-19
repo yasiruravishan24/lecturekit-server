@@ -43,4 +43,4 @@ def active(session: LectureSession) -> bool:
 
 def background_busy(session: LectureSession) -> bool:
     """The pictures or the replay of this lecture are still being made (they read the recording)."""
-    return session.visuals_state in ("queued", "processing") or session.replay_state in ("queued", "processing")
+    return session.visuals_state in ("queued", "processing") or session.replay_state in ("queued", "processing") or session.deeper_state in ("queued", "processing")

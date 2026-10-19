@@ -65,7 +65,7 @@ def commit_files(db: Session, session: LectureSession, sdir, staged, live: bool 
         storage.remove_tree(storage.replay_dir(sdir))                    # everything made from the old recording goes
         storage.remove_tree(storage.shots_dir(sdir))
         session.shots.clear()
-        session.visuals_state = session.replay_state = "none"
+        session.visuals_state = session.replay_state = session.deeper_state = "none"
         session.replay_kind, session.replay_bytes, session.shot_count = None, 0, 0
     for kind, original, tmp, ext, size in staged:
         if kind == "recording":

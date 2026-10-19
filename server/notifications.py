@@ -14,6 +14,8 @@ TEXT = {
     "notes_ready": "Notes are ready",
     "failed": "Processing failed",
     "replay_ready": "Replay and key moments are ready",
+    "deeper_ready": "Learn more is ready",
+    "deeper_failed": "Learn more failed",
 }
 
 

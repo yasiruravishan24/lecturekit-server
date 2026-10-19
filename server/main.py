@@ -21,7 +21,7 @@ from .db import make_session_factory
 from .daily_log import setup_daily_logs
 from .mail import make_mailer
 from .events import Hub, sync
-from .routes import auth, courses, health, live, media, notifications, results, uploads, ws
+from .routes import auth, courses, deeper, health, live, media, notifications, results, uploads, ws
 from .security import LoginGuard
 from .settings import Settings
 from .worker import Worker
@@ -100,7 +100,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     getattr(request.state, "user_id", "-"))            # no bodies, no tokens
         return response
 
-    for module in (auth, courses, uploads, live, results, media, notifications, ws, health):
+    for module in (auth, courses, uploads, live, results, media, deeper, notifications, ws, health):
         app.include_router(module.router, prefix=prefix)
     if prefix:
         app.include_router(health.router)                 # /health also at the root, for monitoring and Caddy

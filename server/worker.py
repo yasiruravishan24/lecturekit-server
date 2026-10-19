@@ -25,7 +25,7 @@ from .settings import Settings
 
 logger = logging.getLogger("lecturekit.server")
 PROGRESS_EVERY = 1.0            # seconds: at most one progress write per second per job
-BACKGROUND = ("visuals", "replay")                              # the second lane
+BACKGROUND = ("visuals", "replay", "deeper")                   # the second lane
 AUDIO_TYPES = {".m4a", ".mp3", ".wav", ".aac", ".ogg"}
 
 
@@ -131,6 +131,8 @@ class Worker:
                 session.visuals_state = "processing"
             elif job.kind == "replay":
                 session.replay_state = "processing"
+            elif job.kind == "deeper":
+                session.deeper_state = "processing"
             sdir = storage.session_dir(self.settings, session.user_id, session.id)
             updir = storage.upload_dir(sdir)
             recordings = [updir / f.stored_name for f in session.files if f.kind == "recording" and not f.removed]
@@ -182,6 +184,12 @@ class Worker:
     def _execute_background(self, info: dict, cb) -> dict:
         """The extra work after a lecture. Needs one recording file (a lecture saved in several files only gets a replay of its sound)."""
         sdir, recordings = info["sdir"], info["recordings"]
+        if info["kind"] == "deeper":                                     # needs the notes only, no recording
+            if not info["notes"]:
+                raise MissingInputError("there are no notes to go deeper on")
+            return lk.go_deeper(sdir, info["notes"], info["questions"], n_questions=self.settings.deeper_questions,
+                                max_searches=self.settings.deeper_searches, final=True, config_name=info["config"],
+                                on_progress=lambda stage, pct: cb(stage, pct, ""))
         if not recordings and info["live_chunks"]:                       # made with the extension: join the parts first (picture and sound)
             cb("prepare", 1, "")
             recordings = [join_live_chunks(info["live_chunks"], info["overlap"] or 0, storage.upload_dir(sdir))]
@@ -214,13 +222,14 @@ class Worker:
         """Tell the user's open clients that this job ended (they fetch the lists again), and leave a notification when it matters."""
         user_id, session_id, kind = info["user_id"], info["session_id"], info["kind"]
         sync(self.hub, user_id, "job_done" if ok else "job_failed", session_id)
-        note = ("notes_ready" if ok else "failed") if kind in ("process", "finish") else "replay_ready" if kind == "replay" and ok else None
+        note = (("notes_ready" if ok else "failed") if kind in ("process", "finish") else "replay_ready" if kind == "replay" and ok
+                else ("deeper_ready" if ok else "deeper_failed") if kind == "deeper" else None)
         if note is None:
             return
         with self.sf() as db:
             session = db.get(LectureSession, session_id)
             if session is not None:
-                notifications.add(db, self.hub, user_id, session, note, f"Processing failed: {message}" if note == "failed" and message else "")
+                notifications.add(db, self.hub, user_id, session, note, f"Processing failed: {message}" if note in ("failed", "deeper_failed") and message else "")
 
     def _progress(self, info: dict):
         """lecturekit's on_progress(stage, percent, message) -> job row (and the open clients), throttled to one write per second."""
@@ -259,15 +268,20 @@ class Worker:
             elif session is not None and info["kind"] == "replay":
                 self._store_replay(db, session, result, info)
                 job.stage, job.percent, job.message = "done", 100, ""
+            elif session is not None and info["kind"] == "deeper":
+                self._store_deeper(db, session, result)
+                job.stage, job.percent, job.message = "done", 100, ""
             elif session is not None:
                 self._store_result(db, session, result)
+                session.deeper_state = "none"                                  # the notes were made anew: the old "go deeper" no longer fits
+                storage.remove_file(storage.session_dir(self.settings, session.user_id, session.id) / "deeper.json")
                 job.stage, job.percent, job.message = "done", 100, "finished"
             job.state, job.finished_at = "done", utcnow()
             follow = None
             if session is not None and info["kind"] in ("process", "finish"):
                 follow = self._start_background(db, session)
-            elif session is not None and info["kind"] == "visuals" and session.replay_state != "ready":
-                follow = self._enqueue(db, session, "replay")
+            elif session is not None and info["kind"] in ("visuals", "deeper"):
+                follow = self._next(db, session, info["kind"])
             db.commit()
         if follow is not None:
             self.submit(follow, background=True)
@@ -280,24 +294,50 @@ class Worker:
         db.add(job)
         if kind == "visuals":
             session.visuals_state = "queued"
+        elif kind == "deeper":
+            session.deeper_state = "queued"
         else:
             session.replay_state = "queued"
         db.flush()
         return job.id
 
-    def _start_background(self, db, session: LectureSession) -> int | None:
-        """After the notes: the first extra job (pictures; the replay follows by itself). None when this lecture has no recording file."""
-        if not self.settings.visuals_enabled:
-            return None
+    def _has_media(self, session: LectureSession) -> bool:
+        """There is a recording (or the parts of one made with the extension) to make pictures and a replay from."""
+        if session.source not in ("upload", "live"):
+            return False
         sdir = storage.session_dir(self.settings, session.user_id, session.id)
         has_parts = session.source == "live" and any(storage.upload_dir(sdir).glob("chunk_*"))
-        if session.source not in ("upload", "live"):
-            return None
-        if has_parts or any(f.kind == "recording" and not f.removed for f in session.files):
+        return has_parts or any(f.kind == "recording" and not f.removed for f in session.files)
+
+    def _auto_deeper(self, session: LectureSession) -> bool:
+        return self.settings.deeper_auto and session.state == "done" and session.deeper_state in ("none", "failed")
+
+    def _start_background(self, db, session: LectureSession) -> int | None:
+        """After the notes, by themselves, one after the other: the board pictures (they improve the notes), then "go deeper", then the
+        replay. Returns the first job, None when there is nothing to do."""
+        if self.settings.visuals_enabled and self._has_media(session):
             return self._enqueue(db, session, "visuals")
-        if session.replay_state == "ready" and session.shot_count:     # a retry: the notes were made anew, so put the board content back
+        if self.settings.visuals_enabled and session.replay_state == "ready" and session.shot_count:     # a retry: put the board content back
             return self._enqueue(db, session, "visuals")
+        if self._auto_deeper(session):
+            return self._enqueue(db, session, "deeper")
         return None
+
+    def _next(self, db, session: LectureSession, finished: str) -> int | None:
+        """The job that follows a finished (or failed) one in the background chain: pictures -> go deeper -> replay."""
+        if finished == "visuals" and self._auto_deeper(session):
+            return self._enqueue(db, session, "deeper")
+        started = self.settings.visuals_enabled or session.visuals_state in ("done", "failed", "skipped")      # the pictures stage ran: the replay follows
+        if finished in ("visuals", "deeper") and started and self._has_media(session) and session.replay_state != "ready":
+            return self._enqueue(db, session, "replay")
+        return None
+
+    def start_deeper(self, db, session: LectureSession) -> int:
+        """Queue "Go deeper" for a finished lecture (the second lane). Returns the job id."""
+        job_id = self._enqueue(db, session, "deeper")
+        db.commit()
+        self.submit(job_id, background=True)
+        return job_id
 
     def start_background(self, db, session: LectureSession) -> int | None:
         """Used by the route that makes the replay on request: queue the extra work now. Returns the first job's id."""
@@ -329,6 +369,17 @@ class Worker:
             db.add(Question(session_id=session.id, position=position, text=q["question"], options_json=json.dumps(q["options"]),
                             answer_index=int(q["answer_index"]), bloom_level=q.get("bloom_level", ""), explanation=q.get("explanation", ""),
                             source="board"))
+
+    @staticmethod
+    def _store_deeper(db, session: LectureSession, result: dict) -> None:
+        """Go deeper is done: the file is on disk (deeper.json); its extra questions go after the old ones, so attempts already made stay valid."""
+        session.deeper_state = "done"
+        position = max([q.position for q in session.questions] or [0])
+        for q in result.get("questions") or []:
+            position += 1
+            db.add(Question(session_id=session.id, position=position, text=q["question"], options_json=json.dumps(q["options"]),
+                            answer_index=int(q["answer_index"]), bloom_level=q.get("bloom_level", ""), explanation=q.get("explanation", ""),
+                            source="extra"))
 
     def _store_replay(self, db, session: LectureSession, result: dict, info: dict) -> None:
         """The replay exists: keep it, and delete the unblurred original (and the copies made for the pipeline)."""
@@ -375,10 +426,13 @@ class Worker:
                     if row is not None:
                         row.state, row.error_message = "failed", message
                 elif info["kind"] == "visuals":
-                    session.visuals_state = "failed"                 # the notes stay as they were; the replay still gets made
-                    follow = self._enqueue(db, session, "replay") if session.replay_state != "ready" else None
+                    session.visuals_state = "failed"                 # the notes stay as they were; the rest still gets made
+                    follow = self._next(db, session, "visuals")
                 elif info["kind"] == "replay":
                     session.replay_state = "failed"                  # the original stays, so it can be tried again
+                elif info["kind"] == "deeper":
+                    session.deeper_state = "failed"                  # the notes are not touched; it can be tried again
+                    follow = self._next(db, session, "deeper")
                 else:
                     session.state = "failed"
             db.commit()

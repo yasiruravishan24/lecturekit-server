@@ -38,4 +38,4 @@ def session_out(db: Session, s: LectureSession) -> dict:
             "latest_job": job_out(latest) if latest else None,
             "has_notes": s.note is not None and s.state == "done", "duration_seconds": _duration(s),
             "live_at": iso(max([c.created_at for c in s.live.chunks if c.created_at] + [s.created_at])) if s.state == "live" and s.live else None,
-            "replay_state": s.replay_state, "replay_kind": s.replay_kind, "visuals_state": s.visuals_state, "shot_count": s.shot_count}
+            "replay_state": s.replay_state, "replay_kind": s.replay_kind, "visuals_state": s.visuals_state, "shot_count": s.shot_count, "deeper_state": s.deeper_state}

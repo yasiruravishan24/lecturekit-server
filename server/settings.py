@@ -38,6 +38,9 @@ class Settings:
     visuals_enabled: bool = True             # background work after the notes: board and screen pictures, replay with blurred faces
     max_storage_gb: int = 10                 # per user: recordings kept for replay, slides, screenshots
     media_link_minutes: int = 120            # how long a signed link to a replay or screenshot works
+    deeper_auto: bool = True                 # make "go deeper" by itself after the notes (about 10 cents a lecture); False: only when asked
+    deeper_questions: int = 3                # extra questions made by "Go deeper" (0 = none)
+    deeper_searches: int = 4                 # most web searches per lecture for "Go deeper"
     visual_questions: int = 3                # extra quiz questions about the board and screen (0 = none)
     web_dist: Path | None = None
     smtp_host: str = ""                      # empty: emails are written to the server log instead of sent
@@ -71,6 +74,9 @@ class Settings:
             max_storage_gb=_int("MAX_STORAGE_GB", 10),
             media_link_minutes=_int("MEDIA_LINK_MINUTES", 120),
             visual_questions=_int("VISUAL_QUESTIONS", 3),
+            deeper_auto=os.getenv("DEEPER_AUTO", "true").strip().lower() in ("1", "true", "yes", "on"),
+            deeper_questions=_int("DEEPER_QUESTIONS", 3),
+            deeper_searches=_int("DEEPER_SEARCHES", 4),
             web_dist=Path(web_dist) if web_dist else None,
             smtp_host=os.getenv("SMTP_HOST", ""),
             smtp_port=_int("SMTP_PORT", 587),

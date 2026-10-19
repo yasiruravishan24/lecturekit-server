@@ -58,7 +58,7 @@ def get_quiz(session_id: Id, user: User = Depends(current_user), db: Session = D
 def submit_attempt(session_id: Id, body: AttemptIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
     session = _done_session(db, user, session_id)
     questions = list(session.questions)
-    old_size = sum(1 for q in questions if q.source != "board")
+    old_size = sum(1 for q in questions if q.source not in ("board", "extra"))
     if len(body.answers) == old_size < len(questions):          # the page was opened before questions about the board were added
         raise conflict(f"Questions about the board were added to this quiz while you were answering ({len(questions) - old_size} new). Reload the quiz to answer them too", "quiz_changed")
     if len(body.answers) != len(questions):

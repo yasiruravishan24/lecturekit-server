@@ -77,6 +77,7 @@ class LectureSession(Base):
     # the picture and replay side, made in the background after the notes (see worker.py)
     visuals_state: Mapped[str] = mapped_column(String(10), default="none")      # none queued processing done failed skipped
     replay_state: Mapped[str] = mapped_column(String(10), default="none")       # none queued processing ready failed
+    deeper_state: Mapped[str] = mapped_column(String(10), default="none")       # "Go deeper": none queued processing done failed
     replay_kind: Mapped[str | None] = mapped_column(String(5), nullable=True)   # video | audio
     replay_bytes: Mapped[int] = mapped_column(Integer, default=0)
     shot_count: Mapped[int] = mapped_column(Integer, default=0)

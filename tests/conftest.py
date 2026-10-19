@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import threading
+import json
 import time
 from pathlib import Path
 
@@ -28,7 +29,7 @@ PASSWORD = "correct horse battery"
 
 def make_settings(tmp_path, **over) -> Settings:
     base = dict(data_dir=tmp_path / "data", jwt_secret="s" * 40, bcrypt_rounds=4,
-                preload_whisper=False, housekeeping_seconds=3600, visuals_enabled=False)
+                preload_whisper=False, housekeeping_seconds=3600, visuals_enabled=False, deeper_auto=False)
     base.update(over)
     return Settings(**base)
 
@@ -124,6 +125,7 @@ class FakeBackground:
         self.gate.set()
         self.visuals_fail: Exception | None = None
         self.replay_fail: Exception | None = None
+        self.deeper_fail: Exception | None = None
         self.shots = [{"t": 12.0, "kind": "board", "text": "F = m a", "description": "", "file": "shot_001.jpg"},
                       {"t": 95.5, "kind": "slide", "text": "Loops", "description": "a flow chart", "file": "shot_002.jpg"}]
 
@@ -152,6 +154,20 @@ class FakeBackground:
         return [{"question": f"What does the board say, part {i}?", "options": ["a", "b", "c", "d"], "answer_index": i % 4,
                  "bloom_level": "apply", "explanation": f"Because {i}.", "source": "board"} for i in range(1, min(n, 2) + 1)]
 
+    def go_deeper(self, out_dir, notes, quiz, n_questions=3, max_searches=4, final=True, llm=None, config_name=None, on_progress=None):
+        self.owner.calls.append(("deeper", len(notes["full_notes"]), [q["question"] for q in quiz], n_questions, max_searches))
+        if on_progress:
+            on_progress("search", 10)
+        self.gate.wait(10)
+        if self.deeper_fail:
+            raise self.deeper_fail
+        data = {"model": "fake", "web": True, "seconds": 1.0, "not_covered": ["recursion"],
+                "topics": [{"index": 1, "background": "bg", "example": "ex", "mistakes": ["m"], "check": [], "links": [{"title": "Docs", "url": "https://docs.python.org/"}]}],
+                "questions": [{"question": "Beyond?", "options": ["a", "b", "c", "d"], "answer_index": 2, "bloom_level": "apply", "explanation": "x", "source": "extra"}]}
+        Path(out_dir).mkdir(parents=True, exist_ok=True)
+        (Path(out_dir) / "deeper.json").write_text(json.dumps(data))
+        return data
+
     def make_replay(self, src, dst_dir, name="replay", on_progress=None):
         self.owner.calls.append(("replay", Path(src).name))
         if on_progress:
@@ -177,6 +193,7 @@ def fake_lk(monkeypatch):
     monkeypatch.setattr(lk, "refine_notes_with_visuals", fake.bg.refine_notes_with_visuals)
     monkeypatch.setattr(lk, "add_visual_questions", fake.bg.add_visual_questions)
     monkeypatch.setattr(lk, "make_replay", fake.bg.make_replay)
+    monkeypatch.setattr(lk, "go_deeper", fake.bg.go_deeper)
     return fake
 
 
