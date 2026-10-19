@@ -69,3 +69,27 @@ def test_a_failed_job_still_counts(tmp_path, fake_lk):
         fake_lk.fail_with = LLMError("x")
         assert wait_job(c, h, run(c, h).json()["job_id"])["state"] == "failed"
         assert run(c, h, "again").status_code == 429                                 # every attempt costs: failures count too
+
+
+def test_the_limit_is_not_checked_on_a_local_computer(tmp_path, fake_lk):
+    app = create_app(make_settings(tmp_path, daily_limit=1, app_env="local"))
+    with TestClient(app, base_url="http://testserver/api") as c:
+        h = new_user(c)
+        for n in range(3):
+            r = run(c, h, f"L{n}")
+            assert r.status_code == 200
+            wait_job(c, h, r.json()["job_id"])
+
+
+def test_a_job_lost_to_a_restart_does_not_use_up_the_limit(tmp_path, fake_lk):
+    app = create_app(make_settings(tmp_path, daily_limit=1))
+    with TestClient(app, base_url="http://testserver/api") as c:
+        h = new_user(c)
+        r = run(c, h, "first")
+        wait_job(c, h, r.json()["job_id"])
+        assert run(c, h, "second").status_code == 429                         # one job used the day
+        with app.state.session_factory() as db:                                    # ... unless it was lost to a restart
+            job = db.get(Job, r.json()["job_id"])
+            job.state, job.error_code = "failed", "server_restarted"
+            db.commit()
+        assert run(c, h, "third").status_code == 200

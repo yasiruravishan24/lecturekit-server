@@ -131,7 +131,7 @@ def test_an_unconfirmed_address_can_be_registered_again(client):
 def test_config_and_google_login(client, monkeypatch):
     cfg = client.get("/auth/config").json()
     assert cfg["google_enabled"] is False and cfg["google_client_id"] is None
-    assert cfg["limits"] == {"daily_limit": 5, "keep_media_days": 7, "max_recording_mb": 1500, "max_slides_mb": 100, "max_recording_parts": 10, "max_storage_gb": 10}
+    assert cfg["limits"] == {"daily_limit": 10, "keep_media_days": 7, "max_recording_mb": 1500, "max_slides_mb": 100, "max_recording_parts": 10, "max_storage_gb": 10}
     assert client.post("/auth/google", json={"id_token": "x", "accept_terms": True}).json()["error"]["code"] == "google_disabled"
     client.app.state.settings.__dict__["google_client_id"] = "client-123.apps.googleusercontent.com"
     assert client.get("/auth/config").json()["google_enabled"] is True
