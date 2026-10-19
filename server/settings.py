@@ -27,6 +27,7 @@ class Settings:
     keep_media_days: int = 7
     web_origin: str = ""
     extension_origin: str = ""
+    mobile_origin: str = "capacitor://localhost"   # the iPhone app (Capacitor); no web page can have this origin, so it is safe to allow
     token_days: int = 7
     max_chunks_per_session: int = 200
     login_max_failures: int = 5
@@ -69,6 +70,7 @@ class Settings:
             keep_media_days=_int("KEEP_MEDIA_DAYS", 7),
             web_origin=os.getenv("WEB_ORIGIN", ""),
             extension_origin=os.getenv("EXTENSION_ORIGIN", ""),
+            mobile_origin=os.getenv("MOBILE_ORIGIN", "capacitor://localhost"),
             log_retention_days=_int("LOG_RETENTION_DAYS", 14),
             visuals_enabled=os.getenv("VISUALS_ENABLED", "1") != "0",
             max_storage_gb=_int("MAX_STORAGE_GB", 10),
@@ -106,4 +108,4 @@ class Settings:
 
     @property
     def cors_origins(self) -> list[str]:
-        return [o for o in (self.web_origin, self.extension_origin) if o]
+        return [o for o in (self.web_origin, self.extension_origin, self.mobile_origin) if o]

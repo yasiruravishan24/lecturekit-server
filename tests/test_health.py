@@ -69,3 +69,11 @@ def test_the_web_app_is_served_with_normal_addresses(tmp_path):
         assert r.status_code == 404 and r.json()["error"]["code"] == "not_found"       # the API keeps its JSON 404
         assert c.get("/api/health").json()["ok"] is not None and c.get("/health").status_code == 200
         assert c.get("/api/docs").status_code == 200
+
+
+def test_the_phone_app_may_call_the_api_from_its_own_origin(client):
+    r = client.options("/auth/login", headers={"Origin": "capacitor://localhost", "Access-Control-Request-Method": "POST",
+                                               "Access-Control-Request-Headers": "content-type"})
+    assert r.status_code == 200 and r.headers["access-control-allow-origin"] == "capacitor://localhost"
+    other = client.options("/auth/login", headers={"Origin": "https://evil.example", "Access-Control-Request-Method": "POST"})
+    assert "access-control-allow-origin" not in other.headers
