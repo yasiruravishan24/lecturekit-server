@@ -78,11 +78,18 @@ def test_new_notes_forget_the_old_go_deeper(client):
     assert client.get(f"/sessions/{sid}", headers=h).json()["deeper_state"] == "none"
 
 
-def test_by_itself_after_the_notes_in_this_order_pictures_then_go_deeper_then_the_replay(tmp_path, fake_lk):
+def test_by_itself_right_after_the_notes_at_the_same_time_as_the_pictures(tmp_path, fake_lk):
     app = create_app(make_settings(tmp_path, visuals_enabled=True, deeper_auto=True))
     with TestClient(app, base_url="http://testserver/api") as c:
         h = new_user(c)
+        fake_lk.bg.gate.clear()                                    # hold the picture lane: "learn more" must not wait for it
         sid = process(c, h)
+        end = time.time() + 5
+        while time.time() < end and c.get(f"/sessions/{sid}", headers=h).json()["deeper_state"] != "processing":
+            time.sleep(0.02)
+        s = c.get(f"/sessions/{sid}", headers=h).json()
+        assert s["visuals_state"] == "processing" and s["deeper_state"] == "processing"           # both are being made at once
+        fake_lk.bg.gate.set()
         end = time.time() + 10
         while time.time() < end:
             s = c.get(f"/sessions/{sid}", headers=h).json()
@@ -90,11 +97,12 @@ def test_by_itself_after_the_notes_in_this_order_pictures_then_go_deeper_then_th
                 break
             time.sleep(0.02)
         assert s["deeper_state"] == "done" and s["replay_state"] == "ready" and s["visuals_state"] == "done"
-        assert [x[0] for x in fake_lk.calls if x[0] in ("visuals", "deeper", "replay")] == ["visuals", "deeper", "replay"]
-        assert c.get(f"/sessions/{sid}/deeper", headers=h).json()["state"] == "done"
+        quiz = c.get(f"/sessions/{sid}/quiz", headers=h).json()["questions"]
+        assert [q["position"] for q in quiz] == list(range(1, len(quiz) + 1))                   # no two questions with the same number
+        assert {"board", "extra"} <= {q["source"] for q in quiz}
 
 
-def test_a_failing_go_deeper_does_not_stop_the_replay(tmp_path, fake_lk):
+def test_a_failing_learn_more_does_not_stop_the_pictures_or_the_replay(tmp_path, fake_lk):
     fake_lk.bg.deeper_fail = LLMError("credit")
     app = create_app(make_settings(tmp_path, visuals_enabled=True, deeper_auto=True))
     with TestClient(app, base_url="http://testserver/api") as c:
@@ -106,10 +114,10 @@ def test_a_failing_go_deeper_does_not_stop_the_replay(tmp_path, fake_lk):
             if s["deeper_state"] == "failed" and s["replay_state"] == "ready":
                 break
             time.sleep(0.02)
-        assert s["deeper_state"] == "failed" and s["replay_state"] == "ready"
+        assert s["deeper_state"] == "failed" and s["replay_state"] == "ready" and s["visuals_state"] == "done"
 
 
-def test_without_pictures_go_deeper_still_runs_by_itself(tmp_path, fake_lk):
+def test_without_pictures_learn_more_still_runs_by_itself(tmp_path, fake_lk):
     app = create_app(make_settings(tmp_path, visuals_enabled=False, deeper_auto=True))
     with TestClient(app, base_url="http://testserver/api") as c:
         h = new_user(c)

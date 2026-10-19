@@ -43,6 +43,7 @@ def config(request: Request):
     """What a client needs before the user logs in."""
     s = request.app.state.settings
     return {"google_enabled": bool(s.google_client_id), "google_client_id": s.google_client_id or None,
+            "features": {"deeper_auto": s.deeper_auto, "visuals": s.visuals_enabled},
             "limits": {"daily_limit": s.daily_limit, "keep_media_days": s.keep_media_days, "max_recording_mb": s.max_recording_mb,
                        "max_slides_mb": s.max_slides_mb, "max_recording_parts": s.max_recording_parts, "max_storage_gb": s.max_storage_gb}}
 

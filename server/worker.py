@@ -4,6 +4,7 @@ then the replay with blurred faces) at a low CPU priority, so it can never hold 
 
 Every unit of work is a `job` row first, then a queue entry. lecturekit is called outside any open database
 transaction; the database is only touched in short sessions before and after the call."""
+import contextlib
 import json
 import logging
 import queue
@@ -35,11 +36,15 @@ class Worker:
         self.hub: Hub | None = None                                   # set by create_app: where progress and notifications are pushed
         self.q: "queue.Queue[int | None]" = queue.Queue()            # main lane: notes and quiz
         self.bg_q: "queue.Queue[int | None]" = queue.Queue()         # background lane: pictures, replay
+        self.dp_q: "queue.Queue[int | None]" = queue.Queue()         # third lane: "learn more" (a web search and a few Claude calls, no CPU work)
         self.thread: threading.Thread | None = None
         self.bg_thread: threading.Thread | None = None
+        self.dp_thread: threading.Thread | None = None
         self._running = False
         self._bg_running = False
-        self._resume: list[int] = []                                  # background jobs of the last run, queued again at start
+        self._dp_running = False
+        self._store_lock = threading.Lock()                           # pictures and "learn more" both add quiz questions: one at a time
+        self._resume: list[tuple[int, str | None]] = []               # background jobs of the last run, queued again at start
 
     # ---- lifecycle ---------------------------------------------------------------------------
     def start(self) -> None:
@@ -48,26 +53,29 @@ class Worker:
             self.thread.start()
             self.bg_thread = threading.Thread(target=self._loop, args=(self.bg_q, True), name="lecturekit-background", daemon=True)
             self.bg_thread.start()
-            for job_id in self._resume:
-                self.submit(job_id, background=True)
+            self.dp_thread = threading.Thread(target=self._loop, args=(self.dp_q, True), name="lecturekit-learn-more", daemon=True)
+            self.dp_thread.start()
+            for job_id, lane in self._resume:
+                self.submit(job_id, background=True, lane=lane)
             self._resume = []
 
     def stop(self) -> None:
-        for q_, th in ((self.q, self.thread), (self.bg_q, self.bg_thread)):
+        for q_, th in ((self.q, self.thread), (self.bg_q, self.bg_thread), (self.dp_q, self.dp_thread)):
             if th is not None:
                 q_.put(None)
                 th.join(timeout=5)
-        self.thread = self.bg_thread = None
+        self.thread = self.bg_thread = self.dp_thread = None
 
-    def submit(self, job_id: int, background: bool = False) -> None:
-        (self.bg_q if background else self.q).put(job_id)
+    def submit(self, job_id: int, background: bool = False, lane: str | None = None) -> None:
+        """lane "deeper": the "learn more" lane; otherwise background says the lane for pictures and replay, or the main one."""
+        (self.dp_q if lane == "deeper" else self.bg_q if background else self.q).put(job_id)
 
     def queue_length(self) -> int:
         """Jobs of the main lane (waiting and running): what a person waiting for notes is behind."""
         return self.q.qsize() + (1 if self._running else 0)
 
     def background_length(self) -> int:
-        return self.bg_q.qsize() + (1 if self._bg_running else 0)
+        return self.bg_q.qsize() + (1 if self._bg_running else 0) + self.dp_q.qsize() + (1 if self._dp_running else 0)
 
     def _loop(self, q_: "queue.Queue[int | None]", background: bool) -> None:
         while True:
@@ -77,13 +85,14 @@ class Worker:
                 if not background:
                     self._safely(self.housekeeping)
                 continue
+            flag = "_dp_running" if q_ is self.dp_q else "_bg_running" if background else "_running"
             try:
                 if job_id is None:
                     return
-                setattr(self, "_bg_running" if background else "_running", True)
+                setattr(self, flag, True)
                 self._safely(self.run_job, job_id)
             finally:
-                setattr(self, "_bg_running" if background else "_running", False)
+                setattr(self, flag, False)
                 q_.task_done()
 
     @staticmethod
@@ -252,7 +261,8 @@ class Worker:
         return cb
 
     def _succeed(self, info: dict, result: dict) -> None:
-        with self.sf() as db:
+        lock = self._store_lock if info["kind"] in ("visuals", "deeper") else contextlib.nullcontext()
+        with lock, self.sf() as db:
             job = db.get(Job, info["job_id"])
             session = db.get(LectureSession, info["session_id"])
             if job is None:
@@ -277,14 +287,14 @@ class Worker:
                 storage.remove_file(storage.session_dir(self.settings, session.user_id, session.id) / "deeper.json")
                 job.stage, job.percent, job.message = "done", 100, "finished"
             job.state, job.finished_at = "done", utcnow()
-            follow = None
+            follows: list[tuple[int, str | None]] = []
             if session is not None and info["kind"] in ("process", "finish"):
-                follow = self._start_background(db, session)
-            elif session is not None and info["kind"] in ("visuals", "deeper"):
-                follow = self._next(db, session, info["kind"])
+                follows = self._start_background(db, session)
+            elif session is not None and info["kind"] == "visuals":
+                follows = [(j, None) for j in [self._next(db, session, "visuals")] if j is not None]
             db.commit()
-        if follow is not None:
-            self.submit(follow, background=True)
+        for job_id, lane in follows:
+            self.submit(job_id, background=True, lane=lane)
         self._announce(info, True)
 
     # ---- the lane for extra work ------------------------------------------------------------------
@@ -312,23 +322,20 @@ class Worker:
     def _auto_deeper(self, session: LectureSession) -> bool:
         return self.settings.deeper_auto and session.state == "done" and session.deeper_state in ("none", "failed")
 
-    def _start_background(self, db, session: LectureSession) -> int | None:
-        """After the notes, by themselves, one after the other: the board pictures (they improve the notes), then "go deeper", then the
-        replay. Returns the first job, None when there is nothing to do."""
-        if self.settings.visuals_enabled and self._has_media(session):
-            return self._enqueue(db, session, "visuals")
-        if self.settings.visuals_enabled and session.replay_state == "ready" and session.shot_count:     # a retry: put the board content back
-            return self._enqueue(db, session, "visuals")
+    def _start_background(self, db, session: LectureSession) -> list[tuple[int, str | None]]:
+        """Right after the notes, at the same time: the board pictures (then the replay follows) in the background lane, and "learn more"
+        in its own lane. Returns [(job id, lane)]."""
+        out: list[tuple[int, str | None]] = []
+        if self.settings.visuals_enabled and (self._has_media(session) or (session.replay_state == "ready" and session.shot_count)):
+            out.append((self._enqueue(db, session, "visuals"), None))
         if self._auto_deeper(session):
-            return self._enqueue(db, session, "deeper")
-        return None
+            out.append((self._enqueue(db, session, "deeper"), "deeper"))
+        return out
 
     def _next(self, db, session: LectureSession, finished: str) -> int | None:
-        """The job that follows a finished (or failed) one in the background chain: pictures -> go deeper -> replay."""
-        if finished == "visuals" and self._auto_deeper(session):
-            return self._enqueue(db, session, "deeper")
-        started = self.settings.visuals_enabled or session.visuals_state in ("done", "failed", "skipped")      # the pictures stage ran: the replay follows
-        if finished in ("visuals", "deeper") and started and self._has_media(session) and session.replay_state != "ready":
+        """The job that follows the pictures (done or failed): the replay."""
+        started = self.settings.visuals_enabled or session.visuals_state in ("done", "failed", "skipped")
+        if finished == "visuals" and started and self._has_media(session) and session.replay_state != "ready":
             return self._enqueue(db, session, "replay")
         return None
 
@@ -336,7 +343,7 @@ class Worker:
         """Queue "Go deeper" for a finished lecture (the second lane). Returns the job id."""
         job_id = self._enqueue(db, session, "deeper")
         db.commit()
-        self.submit(job_id, background=True)
+        self.submit(job_id, background=True, lane="deeper")
         return job_id
 
     def start_background(self, db, session: LectureSession) -> int | None:
@@ -432,7 +439,6 @@ class Worker:
                     session.replay_state = "failed"                  # the original stays, so it can be tried again
                 elif info["kind"] == "deeper":
                     session.deeper_state = "failed"                  # the notes are not touched; it can be tried again
-                    follow = self._next(db, session, "deeper")
                 else:
                     session.state = "failed"
             db.commit()
@@ -447,7 +453,7 @@ class Worker:
             stale = db.scalars(select(Job).where(Job.state.in_(("queued", "processing")))).all()
             for job in [j for j in stale if j.kind in BACKGROUND]:     # extra work is simply started again
                 job.state, job.stage, job.percent = "queued", "queued", 0
-                self._resume.append(job.id)
+                self._resume.append((job.id, "deeper" if job.kind == "deeper" else None))
             stale = [j for j in stale if j.kind not in BACKGROUND]
             for job in stale:
                 job.state, job.finished_at = "failed", utcnow()
