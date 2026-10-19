@@ -5,12 +5,12 @@ from sqlalchemy.orm import Session
 from lecturekit import api as lk
 from lecturekit.chunks import CHUNK_SECONDS, OVERLAP
 
-from .. import storage
+from .. import notifications, storage
 from ..access import own_session
 from ..db import get_db
 from ..errors import ApiError, conflict, unprocessable
 from ..jobs import enqueue
-from ..models import LiveChunk, LiveUpload, User
+from ..models import LiveChunk, LiveUpload, User, iso, utcnow
 from ..validation import Id
 from ..security import current_user
 from .uploads import commit_files, stage_files
@@ -39,11 +39,12 @@ def _status(live: LiveUpload, total: int | None) -> dict:
     missing = [k for k in range(total) if k not in rows or rows[k].state == "failed"] if total else []
     return {"chunk_seconds": live.chunk_seconds, "overlap": live.overlap, "total": total,
             "received": sorted(rows), "transcribed": sorted(k for k, c in rows.items() if c.state == "transcribed"),
-            "failed": sorted(k for k, c in rows.items() if c.state == "failed"), "missing": missing}
+            "failed": sorted(k for k, c in rows.items() if c.state == "failed"), "missing": missing,
+            "last_chunk_at": iso(max((c.created_at for c in rows.values() if c.created_at), default=None))}
 
 
 @router.post("/sessions/{session_id}/live")
-def open_live(session_id: Id, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def open_live(session_id: Id, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
     session = own_session(db, user, session_id)
     if session.live is None:
         if session.state != "empty":
@@ -51,6 +52,7 @@ def open_live(session_id: Id, user: User = Depends(current_user), db: Session = 
         session.live = LiveUpload(chunk_seconds=CHUNK_SECONDS, overlap=OVERLAP)
         session.source, session.state = "live", "live"
         db.commit()
+        notifications.add(db, request.app.state.hub, user.id, session, "recording_started")
     return {"chunk_seconds": session.live.chunk_seconds, "overlap": session.live.overlap}
 
 
@@ -73,9 +75,9 @@ def upload_chunk(session_id: Id, request: Request, index: int = Query(ge=0, le=1
         old.unlink(missing_ok=True)
     tmp.replace(updir / f"chunk_{index:05d}{ext}")
     if existing is None:
-        session.live.chunks.append(LiveChunk(idx=index, state="received"))
+        session.live.chunks.append(LiveChunk(idx=index, state="received", created_at=utcnow()))
     else:
-        existing.state, existing.seconds, existing.error_message = "received", None, None
+        existing.state, existing.seconds, existing.error_message, existing.created_at = "received", None, None, utcnow()
     session.state = "live"
     db.commit()
     job = enqueue(request, db, user, session, "chunk", index)

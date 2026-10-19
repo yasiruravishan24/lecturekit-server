@@ -73,3 +73,18 @@ python -m server.admin list-users
 python -m server.admin set-password someone@example.com        # asks for the new password
 ```
 (Inside the container, from the parent folder: `docker compose exec app python -m server.admin ...`.)
+
+
+## Live updates (WebSocket) and notifications
+
+Every client (web page, extension, **the mobile app when it is built**) opens one WebSocket to `/api/ws` and sends `{"token": "<login token>"}` as its first
+message (never in the address). The server then pushes what changes, so no client needs a refresh: `hello`, `ping` (every 25 s), `sync` (something of this
+user changed: fetch the lists again), `job` (progress of a job), `notification`, `resync` (events were missed: fetch everything). The exact shapes are in
+`server/events.py`. A client that loses the socket reconnects with a growing wait and fetches everything again after `hello`.
+
+Notifications are kept on the server (`GET /notifications`, `POST /notifications/{id}/read`, `POST /notifications/read-all`, `DELETE /notifications`), so
+every device shows the same list: `recording_started`, `processing_started`, `notes_ready`, `failed`, `replay_ready`.
+
+**Mobile app to do:** connect to the same socket, refresh its lists on `sync`, show progress from `job`, and show `notification` as an in-app banner and in
+its notification list (later also as a phone push). Anything done on the website or the extension must appear in the app without pulling to refresh, and
+the other way round.

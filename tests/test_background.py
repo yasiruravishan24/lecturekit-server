@@ -346,3 +346,30 @@ def test_no_board_questions_when_switched_off_or_nothing_was_seen(tmp_path, fake
         wait_bg(c, h, sid)
         assert len(c.get(f"/sessions/{sid}/quiz", headers=h).json()["questions"]) == 3
         assert not [x for x in fake_lk.calls if x[0] == "board_quiz"]
+
+
+def test_a_recording_made_with_the_extension_also_gets_pictures_and_a_replay(vclient, fake_lk, monkeypatch):
+    joined_with = {}
+
+    def fake_join(chunks, overlap, out_dir):
+        joined_with.update(names=[c.name for c in chunks], overlap=overlap)
+        out = out_dir / "live_joined.mp4"
+        out.write_bytes(b"video")
+        return out
+
+    monkeypatch.setattr("server.worker.join_live_chunks", fake_join)
+    h = new_user(vclient)
+    sid = make_session(vclient, h, "Online lecture")
+    vclient.post(f"/sessions/{sid}/live", headers=h)
+    for k in range(2):
+        vclient.post(f"/sessions/{sid}/live/chunks", params={"index": k}, headers=h, files={"chunk": file_part(f"c{k}.webm", b"x")})
+    job = wait_job(vclient, h, vclient.post(f"/sessions/{sid}/live/finish", params={"total": 2}, headers=h).json()["job_id"])
+    assert job["state"] == "done"
+    info = wait_bg(vclient, h, sid)
+    assert info["state"] == "ready" and info["kind"] == "video" and info["url"] and info["visuals_state"] == "done"
+    assert joined_with == {"names": ["chunk_00000.webm", "chunk_00001.webm"], "overlap": 5}      # the parts in order, with the overlap to cut off
+    assert [c[1] for c in fake_lk.calls if c[0] in ("visuals", "replay")] == ["live_joined.mp4", "live_joined.mp4"]
+    assert vclient.get(f"/sessions/{sid}", headers=h).json()["shot_count"] == 2
+    uid = vclient.get("/auth/me", headers=h).json()["user"]["id"]
+    folder = vclient.app_.state.settings.users_dir / str(uid) / "sessions" / str(sid) / "upload"
+    assert [p.name for p in folder.iterdir()] == []                                             # the big originals are deleted once the replay exists

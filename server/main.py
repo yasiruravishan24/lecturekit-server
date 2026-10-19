@@ -2,6 +2,7 @@
 
 Run (from the server/ folder):  uvicorn server.main:app --host 0.0.0.0 --port 8000 --workers 1
 One worker process only: a second one would break the single job queue."""
+import asyncio
 import logging
 import re
 import threading
@@ -19,7 +20,8 @@ from . import errors
 from .db import make_session_factory
 from .daily_log import setup_daily_logs
 from .mail import make_mailer
-from .routes import auth, courses, health, live, media, results, uploads
+from .events import Hub, sync
+from .routes import auth, courses, health, live, media, notifications, results, uploads, ws
 from .security import LoginGuard
 from .settings import Settings
 from .worker import Worker
@@ -51,10 +53,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings.validate()                                   # refuses to start with a weak JWT secret
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     session_factory = make_session_factory(settings)
+    hub = Hub()
     worker = Worker(settings, session_factory)
+    worker.hub = hub
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        hub.bind(asyncio.get_running_loop())              # events from the worker threads are handed to this loop
         lk.log.setup(quiet=True)                          # lecturekit's log files go to DATA_DIR/logs
         setup_daily_logs(settings.log_dir, settings.log_retention_days)     # logs/server-DATE.log and logs/error-DATE.log
         recovered = worker.recover()
@@ -71,7 +76,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="lecturekit server", lifespan=lifespan, redoc_url=None,
                   docs_url=f"{prefix}/docs" if prefix else "/docs",
                   openapi_url=f"{prefix}/openapi.json" if prefix else "/openapi.json")
-    app.state.settings, app.state.session_factory, app.state.worker = settings, session_factory, worker
+    app.state.settings, app.state.session_factory, app.state.worker, app.state.hub = settings, session_factory, worker, hub
     app.state.mailer, app.state.resend_times = make_mailer(settings), {}
     app.state.login_guard = LoginGuard(settings.login_max_failures, settings.login_window_seconds)
     errors.register(app)
@@ -89,11 +94,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return JSONResponse({"error": {"code": "too_large", "message": f"File too large (limit {biggest // 1024 // 1024} MB)"}},
                                 status_code=413)
         response = await call_next(request)
+        if request.method in ("POST", "PUT", "PATCH", "DELETE") and response.status_code < 300 and getattr(request.state, "user_id", None):
+            sync(hub, request.state.user_id, "change")        # whatever this request changed, the user's other open clients refresh it
         logger.info("%s %s %s user=%s", request.method, re.sub(r"/media/[^/?]+", "/media/...", request.url.path), response.status_code,
                     getattr(request.state, "user_id", "-"))            # no bodies, no tokens
         return response
 
-    for module in (auth, courses, uploads, live, results, media, health):
+    for module in (auth, courses, uploads, live, results, media, notifications, ws, health):
         app.include_router(module.router, prefix=prefix)
     if prefix:
         app.include_router(health.router)                 # /health also at the root, for monitoring and Caddy

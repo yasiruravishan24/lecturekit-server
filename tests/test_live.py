@@ -182,3 +182,17 @@ def test_live_and_whole_file_routes_do_not_mix(client):
     assert up.status_code == 409 and up.json()["error"]["code"] == "live_session"
     pr = client.post(f"/sessions/{live_sid}/process", headers=h)
     assert pr.status_code == 409 and pr.json()["error"]["code"] == "live_session"
+
+
+def test_clients_can_tell_that_a_recording_is_going_on(client, app, fake_lk):
+    h = new_user(client)
+    sid = open_live(client, h)
+    first = client.get(f"/sessions/{sid}", headers=h).json()["live_at"]
+    assert first                                                              # a recording that just started: the time it was opened
+    assert client.get(f"/sessions/{sid}/live", headers=h).json()["last_chunk_at"] is None
+    chunk(client, h, sid, 0)
+    status = client.get(f"/sessions/{sid}/live", headers=h).json()
+    assert status["last_chunk_at"] and status["last_chunk_at"] >= first
+    assert client.get(f"/sessions/{sid}", headers=h).json()["live_at"] == status["last_chunk_at"]
+    other = make_session(client, h)
+    assert client.get(f"/sessions/{other}", headers=h).json()["live_at"] is None            # only live recordings have it

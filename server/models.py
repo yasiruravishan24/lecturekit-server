@@ -131,6 +131,18 @@ class Job(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class Notification(Base):
+    __tablename__ = "notification"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = _fk("user.id")
+    session_id: Mapped[int | None] = mapped_column(Integer, nullable=True)       # no foreign key: the notice stays when the lecture is deleted
+    kind: Mapped[str] = mapped_column(String(24))        # recording_started | processing_started | notes_ready | failed | replay_ready
+    title: Mapped[str] = mapped_column(String(160), default="")
+    message: Mapped[str] = mapped_column(String(300), default="")
+    read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
 class LiveUpload(Base):
     __tablename__ = "live_upload"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -151,6 +163,7 @@ class LiveChunk(Base):
     state: Mapped[str] = mapped_column(String(12), default="received")  # received | transcribed | failed
     seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)       # when this part last arrived (clients show "recording now")
 
 
 class Note(Base):

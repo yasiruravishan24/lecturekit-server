@@ -19,7 +19,7 @@ class Settings:
     jwt_secret: str
     api_prefix: str = "/api"                 # all routes live under this prefix; "/" serves the web app
     daily_limit: int = 10
-    app_env: str = "production"             # "local": the daily limit is not checked (your own computer, your own Claude credit)
+    check_daily_limit: bool = False          # CHECK_DAILY_LIMIT=true: enforce DAILY_LIMIT (switch it on for a real server that spends your Claude credit)
     max_recording_mb: int = 1500             # one recording file, and also all parts of one lecture together
     max_recording_parts: int = 10            # recording files in one lecture
     max_chunk_mb: int = 60
@@ -58,7 +58,7 @@ class Settings:
             jwt_secret=os.getenv("JWT_SECRET", ""),
             api_prefix=os.getenv("API_PREFIX", "/api").rstrip("/"),
             daily_limit=_int("DAILY_LIMIT", 10),
-            app_env=os.getenv("APP_ENV", "production").strip().lower(),
+            check_daily_limit=os.getenv("CHECK_DAILY_LIMIT", "false").strip().lower() in ("1", "true", "yes", "on"),
             max_recording_mb=_int("MAX_RECORDING_MB", 1500),
             max_recording_parts=_int("MAX_RECORDING_PARTS", 10),
             max_chunk_mb=_int("MAX_CHUNK_MB", 60),

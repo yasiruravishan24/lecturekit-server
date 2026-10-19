@@ -8,3 +8,4 @@ bcrypt>=4.0           # password hashing
 pyjwt>=2.8            # login tokens
 httpx>=0.27           # checks Google sign-in tokens; also the FastAPI TestClient in tests
 reportlab>=4.0        # PDF export of the notes (pure Python)
+websockets>=12      # the live updates (WebSocket) of uvicorn

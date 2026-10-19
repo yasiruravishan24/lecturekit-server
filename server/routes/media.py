@@ -55,11 +55,13 @@ def make_replay(session_id: Id, request: Request, user: User = Depends(current_u
     s = own_session(db, user, session_id)
     if active(s) or background_busy(s):
         raise conflict("This lecture is still being worked on; try again when it has finished", "busy")
-    if s.state != "done" or s.source != "upload":
+    if s.state != "done":
         raise unprocessable("The replay can be made once the notes are ready", "validation")
     if s.replay_state == "ready":
         raise conflict("The replay is already there", "replay_exists")
-    if not any(f.kind == "recording" and not f.removed for f in s.files):
+    sdir = storage.session_dir(request.app.state.settings, s.user_id, s.id)
+    parts = s.source == "live" and any(storage.upload_dir(sdir).glob("chunk_*"))        # a recording made with the extension
+    if not parts and not any(f.kind == "recording" and not f.removed for f in s.files):
         raise unprocessable("The original recording is no longer on the server, so there is nothing to make a replay from", "missing_input")
     job_id = request.app.state.worker.start_background(db, s)
     return {"job_id": job_id}

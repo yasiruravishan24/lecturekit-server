@@ -15,7 +15,7 @@ def run(client, h, title="L"):
 
 
 def test_daily_limit_gives_429(tmp_path, fake_lk):
-    app = create_app(make_settings(tmp_path, daily_limit=2))
+    app = create_app(make_settings(tmp_path, daily_limit=2, check_daily_limit=True))
     with TestClient(app, base_url="http://testserver/api") as c:
         h = new_user(c)
         for n in range(2):
@@ -30,7 +30,7 @@ def test_daily_limit_gives_429(tmp_path, fake_lk):
 
 
 def test_the_limit_counts_only_the_last_24_hours(tmp_path, fake_lk):
-    app = create_app(make_settings(tmp_path, daily_limit=2))
+    app = create_app(make_settings(tmp_path, daily_limit=2, check_daily_limit=True))
     with TestClient(app, base_url="http://testserver/api") as c:
         h = new_user(c)
         for n in range(2):
@@ -47,7 +47,7 @@ def test_the_limit_counts_only_the_last_24_hours(tmp_path, fake_lk):
 
 
 def test_chunk_jobs_do_not_count_but_finish_does(tmp_path, fake_lk):
-    app = create_app(make_settings(tmp_path, daily_limit=1))
+    app = create_app(make_settings(tmp_path, daily_limit=1, check_daily_limit=True))
     with TestClient(app, base_url="http://testserver/api") as c:
         h = new_user(c)
         sid = make_session(c, h)
@@ -63,7 +63,7 @@ def test_chunk_jobs_do_not_count_but_finish_does(tmp_path, fake_lk):
 
 def test_a_failed_job_still_counts(tmp_path, fake_lk):
     from lecturekit.errors import LLMError
-    app = create_app(make_settings(tmp_path, daily_limit=1))
+    app = create_app(make_settings(tmp_path, daily_limit=1, check_daily_limit=True))
     with TestClient(app, base_url="http://testserver/api") as c:
         h = new_user(c)
         fake_lk.fail_with = LLMError("x")
@@ -71,8 +71,8 @@ def test_a_failed_job_still_counts(tmp_path, fake_lk):
         assert run(c, h, "again").status_code == 429                                 # every attempt costs: failures count too
 
 
-def test_the_limit_is_not_checked_on_a_local_computer(tmp_path, fake_lk):
-    app = create_app(make_settings(tmp_path, daily_limit=1, app_env="local"))
+def test_the_limit_is_not_checked_unless_switched_on(tmp_path, fake_lk):
+    app = create_app(make_settings(tmp_path, daily_limit=1))
     with TestClient(app, base_url="http://testserver/api") as c:
         h = new_user(c)
         for n in range(3):
@@ -82,7 +82,7 @@ def test_the_limit_is_not_checked_on_a_local_computer(tmp_path, fake_lk):
 
 
 def test_a_job_lost_to_a_restart_does_not_use_up_the_limit(tmp_path, fake_lk):
-    app = create_app(make_settings(tmp_path, daily_limit=1))
+    app = create_app(make_settings(tmp_path, daily_limit=1, check_daily_limit=True))
     with TestClient(app, base_url="http://testserver/api") as c:
         h = new_user(c)
         r = run(c, h, "first")

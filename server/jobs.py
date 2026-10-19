@@ -5,6 +5,7 @@ from fastapi import Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from . import notifications
 from .errors import ApiError
 from .models import Job, LectureSession, User, utcnow
 
@@ -24,12 +25,14 @@ def enqueue(request: Request, db: Session, user: User, session: LectureSession, 
     """Create the job row first, then queue it. process and finish also move the session to `queued`."""
     settings = request.app.state.settings
     if kind in ("process", "finish"):
-        if settings.app_env != "local":
+        if settings.check_daily_limit:
             check_daily_limit(db, user, settings.daily_limit)
         session.state = "queued"
     job = Job(session_id=session.id, user_id=user.id, kind=kind, arg=arg)
     db.add(job)
     db.commit()
+    if kind in ("process", "finish"):
+        notifications.add(db, request.app.state.hub, user.id, session, "processing_started")
     request.app.state.worker.submit(job.id)
     return job
 

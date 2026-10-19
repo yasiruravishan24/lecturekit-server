@@ -16,9 +16,10 @@ from sqlalchemy import select
 from lecturekit import api as lk
 from lecturekit.errors import LectureKitError, MissingInputError
 
-from . import storage
+from . import notifications, storage
+from .events import Hub, sync
 from .errors import job_error
-from .media import JOINED_NAME, join_recordings
+from .media import JOINED_NAME, LIVE_JOINED, join_live_chunks, join_recordings
 from .models import Attempt, Job, LectureSession, LiveChunk, Note, Question, Shot, utcnow
 from .settings import Settings
 
@@ -31,6 +32,7 @@ AUDIO_TYPES = {".m4a", ".mp3", ".wav", ".aac", ".ogg"}
 class Worker:
     def __init__(self, settings: Settings, session_factory):
         self.settings, self.sf = settings, session_factory
+        self.hub: Hub | None = None                                   # set by create_app: where progress and notifications are pushed
         self.q: "queue.Queue[int | None]" = queue.Queue()            # main lane: notes and quiz
         self.bg_q: "queue.Queue[int | None]" = queue.Queue()         # background lane: pictures, replay
         self.thread: threading.Thread | None = None
@@ -132,13 +134,19 @@ class Worker:
             sdir = storage.session_dir(self.settings, session.user_id, session.id)
             updir = storage.upload_dir(sdir)
             recordings = [updir / f.stored_name for f in session.files if f.kind == "recording" and not f.removed]
-            if not recordings and (replay := storage.find_replay(sdir)) is not None:
+            live_chunks = []
+            if session.source == "live" and session.live is not None and job.kind in BACKGROUND:
+                existing = sorted(updir.glob(f"{LIVE_JOINED}.*"))     # the parts of a recording made with the extension, joined
+                recordings = existing[:1]
+                total = session.live.total or 0
+                live_chunks = [c for k in range(total) for c in sorted(updir.glob(f"chunk_{k:05d}.*"))[:1]] if not existing else []
+            if not recordings and not live_chunks and (replay := storage.find_replay(sdir)) is not None:
                 recordings = [replay]                                # the original is gone: the replay has the same sound
             note = db.scalar(select(Note).where(Note.session_id == session.id))
             questions = [{"question": q.text, "source": q.source} for q in session.questions]
             info = {"job_id": job.id, "kind": job.kind, "arg": job.arg, "session_id": session.id,
                     "user_id": session.user_id, "title": session.title, "sdir": sdir, "recordings": recordings,
-                    "slides": [updir / f.stored_name for f in session.files if f.kind == "slides"],
+                    "slides": [updir / f.stored_name for f in session.files if f.kind == "slides"], "live_chunks": live_chunks,
                     "chunk_seconds": session.live.chunk_seconds if session.live else None,
                     "overlap": session.live.overlap if session.live else None,
                     "config": session.config, "source": session.source, "questions": questions,
@@ -148,10 +156,11 @@ class Worker:
             if job.kind == "chunk":
                 info["chunk_file"] = next(iter(sorted(updir.glob(f"chunk_{job.arg:05d}.*"))), None)
             db.commit()
+        sync(self.hub, info["user_id"], "job_started", info["session_id"])
         return info
 
     def _execute(self, info: dict) -> dict:
-        kind, cb = info["kind"], self._progress(info["job_id"])
+        kind, cb = info["kind"], self._progress(info)
         slides = info["slides"] or None
         if kind in BACKGROUND:
             return self._execute_background(info, cb)
@@ -173,6 +182,9 @@ class Worker:
     def _execute_background(self, info: dict, cb) -> dict:
         """The extra work after a lecture. Needs one recording file (a lecture saved in several files only gets a replay of its sound)."""
         sdir, recordings = info["sdir"], info["recordings"]
+        if not recordings and info["live_chunks"]:                       # made with the extension: join the parts first (picture and sound)
+            cb("prepare", 1, "")
+            recordings = [join_live_chunks(info["live_chunks"], info["overlap"] or 0, storage.upload_dir(sdir))]
         if not recordings or not recordings[0].exists():
             raise MissingInputError("the recording is no longer on the server")
         if info["kind"] == "visuals":
@@ -198,8 +210,21 @@ class Worker:
             source = joined if joined.exists() else join_recordings(recordings, joined)
         return lk.make_replay(source, storage.replay_dir(sdir), on_progress=lambda pct: cb("replay", pct, ""))
 
-    def _progress(self, job_id: int):
-        """lecturekit's on_progress(stage, percent, message) -> job row, throttled to one write per second."""
+    def _announce(self, info: dict, ok: bool, message: str = "") -> None:
+        """Tell the user's open clients that this job ended (they fetch the lists again), and leave a notification when it matters."""
+        user_id, session_id, kind = info["user_id"], info["session_id"], info["kind"]
+        sync(self.hub, user_id, "job_done" if ok else "job_failed", session_id)
+        note = ("notes_ready" if ok else "failed") if kind in ("process", "finish") else "replay_ready" if kind == "replay" and ok else None
+        if note is None:
+            return
+        with self.sf() as db:
+            session = db.get(LectureSession, session_id)
+            if session is not None:
+                notifications.add(db, self.hub, user_id, session, note, f"Processing failed: {message}" if note == "failed" and message else "")
+
+    def _progress(self, info: dict):
+        """lecturekit's on_progress(stage, percent, message) -> job row (and the open clients), throttled to one write per second."""
+        job_id = info["job_id"]
         last = {"t": 0.0, "stage": None}
 
         def cb(stage: str, percent: int, message: str = "") -> None:
@@ -212,6 +237,9 @@ class Worker:
                 if job is not None:
                     job.stage, job.percent, job.message = stage, int(percent), message or ""
                     db.commit()
+            if self.hub is not None:
+                self.hub.publish(info["user_id"], {"type": "job", "session_id": info["session_id"], "kind": info["kind"],
+                                                   "stage": stage, "percent": int(percent), "message": message or ""})
         return cb
 
     def _succeed(self, info: dict, result: dict) -> None:
@@ -243,6 +271,7 @@ class Worker:
             db.commit()
         if follow is not None:
             self.submit(follow, background=True)
+        self._announce(info, True)
 
     # ---- the lane for extra work ------------------------------------------------------------------
     @staticmethod
@@ -258,9 +287,13 @@ class Worker:
 
     def _start_background(self, db, session: LectureSession) -> int | None:
         """After the notes: the first extra job (pictures; the replay follows by itself). None when this lecture has no recording file."""
-        if not self.settings.visuals_enabled or session.source != "upload":
+        if not self.settings.visuals_enabled:
             return None
-        if any(f.kind == "recording" and not f.removed for f in session.files):
+        sdir = storage.session_dir(self.settings, session.user_id, session.id)
+        has_parts = session.source == "live" and any(storage.upload_dir(sdir).glob("chunk_*"))
+        if session.source not in ("upload", "live"):
+            return None
+        if has_parts or any(f.kind == "recording" and not f.removed for f in session.files):
             return self._enqueue(db, session, "visuals")
         if session.replay_state == "ready" and session.shot_count:     # a retry: the notes were made anew, so put the board content back
             return self._enqueue(db, session, "visuals")
@@ -306,6 +339,8 @@ class Worker:
                 storage.remove_file(storage.upload_dir(sdir) / f.stored_name)
                 f.removed, f.bytes = True, 0
         storage.remove_file(storage.upload_dir(sdir) / JOINED_NAME)
+        for leftover in [*storage.upload_dir(sdir).glob(f"{LIVE_JOINED}.*"), *storage.upload_dir(sdir).glob("chunk_*")]:
+            leftover.unlink(missing_ok=True)                           # the parts of a recording made with the extension
         for media in sdir.glob("media.*"):
             media.unlink(missing_ok=True)
 
@@ -349,6 +384,7 @@ class Worker:
             db.commit()
         if follow is not None:
             self.submit(follow, background=True)
+        self._announce(info, False, message)
 
     # ---- startup recovery and housekeeping -----------------------------------------------------
     def recover(self) -> int:
