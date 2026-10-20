@@ -59,6 +59,11 @@ class VerifyIn(BaseModel):
         return v.replace(" ", "").strip()
 
 
+class ChangePasswordIn(BaseModel):
+    current_password: str = Field(max_length=200)
+    new_password: str = Field(min_length=8, max_length=200)
+
+
 class GoogleIn(BaseModel):
     id_token: str = Field(max_length=4000)
     accept_terms: StrictBool = False                     # needed the first time (when the account is created)

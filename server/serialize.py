@@ -9,7 +9,7 @@ from .models import Job, LectureSession, iso
 
 def user_out(user) -> dict:
     return {"id": user.id, "email": user.email, "full_name": user.full_name, "email_verified": user.email_verified,
-            "google_linked": user.google_sub is not None, "created_at": iso(user.created_at)}
+            "google_linked": user.google_sub is not None, "email_login": bool(user.password_hash), "created_at": iso(user.created_at)}
 
 
 def job_out(job: Job) -> dict:

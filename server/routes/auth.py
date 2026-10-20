@@ -14,7 +14,7 @@ from ..errors import ApiError
 from ..google import verify_google_token
 from ..mail_templates import verification_email, welcome_email
 from ..models import Job, User, iso, utcnow
-from ..schemas import EmailIn, GoogleIn, LoginIn, RegisterIn, VerifyIn
+from ..schemas import ChangePasswordIn, EmailIn, GoogleIn, LoginIn, RegisterIn, VerifyIn
 from ..security import (burn_password_check, create_token, current_user, hash_code, hash_password, new_code,
                         verify_password)
 from ..serialize import user_out
@@ -169,6 +169,26 @@ def usage(request: Request, user: User = Depends(current_user), db: Session = De
 @router.get("/me")
 def me(user: User = Depends(current_user)):
     return {"user": user_out(user)}
+
+
+@router.post("/change-password")
+def change_password(body: ChangePasswordIn, request: Request, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    """A person who has a password (not one who only signs in with Google) sets a new one, after giving the current one."""
+    settings, guard = request.app.state.settings, request.app.state.login_guard
+    if not user.password_hash:
+        raise ApiError(409, "no_password", "This account signs in with Google, so it has no password to change")
+    wait = guard.blocked_for(user.email)
+    if wait:
+        raise ApiError(429, "too_many_attempts", f"Too many failed attempts; try again in {max(1, wait // 60)} minutes")
+    if not verify_password(body.current_password, user.password_hash):
+        guard.record_failure(user.email)
+        raise ApiError(401, "bad_current_password", "The current password is wrong")
+    guard.reset(user.email)
+    if body.new_password == body.current_password:
+        raise ApiError(422, "same_password", "Choose a password that is different from the current one")
+    user.password_hash = hash_password(body.new_password, settings.bcrypt_rounds)
+    db.commit()
+    return {"changed": True}
 
 
 @router.delete("/me", status_code=204)
