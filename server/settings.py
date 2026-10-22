@@ -49,7 +49,8 @@ class Settings:
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_from: str = ""
-    google_client_id: str = ""               # empty: Google login is switched off
+    google_client_id: str = ""               # empty: Google login is switched off (web app and extension)
+    google_ios_client_id: str = ""           # the iPhone app has its own client of the same Google project; empty: Google login is off on the phone
     otp_minutes: int = 10
     otp_max_attempts: int = 5
     resend_seconds: int = 60
@@ -86,6 +87,7 @@ class Settings:
             smtp_password=os.getenv("SMTP_PASSWORD", ""),
             smtp_from=os.getenv("SMTP_FROM", ""),
             google_client_id=os.getenv("GOOGLE_CLIENT_ID", ""),
+            google_ios_client_id=os.getenv("GOOGLE_IOS_CLIENT_ID", ""),
         )
 
     def validate(self) -> None:

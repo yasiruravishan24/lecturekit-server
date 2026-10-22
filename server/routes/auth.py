@@ -43,6 +43,7 @@ def config(request: Request):
     """What a client needs before the user logs in."""
     s = request.app.state.settings
     return {"google_enabled": bool(s.google_client_id), "google_client_id": s.google_client_id or None,
+            "google_ios_client_id": s.google_ios_client_id or None,
             "features": {"deeper_auto": s.deeper_auto, "visuals": s.visuals_enabled},
             "limits": {"daily_limit": s.daily_limit, "keep_media_days": s.keep_media_days, "max_recording_mb": s.max_recording_mb,
                        "max_slides_mb": s.max_slides_mb, "max_recording_parts": s.max_recording_parts, "max_storage_gb": s.max_storage_gb}}
@@ -132,9 +133,10 @@ def google_login(body: GoogleIn, request: Request, background: BackgroundTasks, 
     """Log in (or sign up) with a Google ID token. A Google account counts as a verified email."""
     settings = request.app.state.settings
     request.state.mail_jobs = []
-    if not settings.google_client_id:
+    client_ids = [c for c in (settings.google_client_id, settings.google_ios_client_id) if c]       # the web app and the extension, and the iPhone app
+    if not client_ids:
         raise ApiError(503, "google_disabled", "Google sign-in is not set up on this server")
-    info = verify_google_token(settings.google_client_id, body.id_token)
+    info = verify_google_token(client_ids, body.id_token)
     info["email"] = info["email"].strip().lower()
     user = db.scalar(select(User).where(User.google_sub == info["sub"]))
     if user is None:
