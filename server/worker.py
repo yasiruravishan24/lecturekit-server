@@ -30,6 +30,10 @@ BACKGROUND = ("visuals", "replay", "deeper")                   # the second lane
 AUDIO_TYPES = {".m4a", ".mp3", ".wav", ".aac", ".ogg"}
 
 
+class JobCancelled(BaseException):
+    """Raised from the progress callback when the person pressed Cancel. A BaseException on purpose: the pipeline's own `except Exception` must not swallow it."""
+
+
 class Worker:
     def __init__(self, settings: Settings, session_factory):
         self.settings, self.sf = settings, session_factory
@@ -43,6 +47,7 @@ class Worker:
         self._running = False
         self._bg_running = False
         self._dp_running = False
+        self._cancel_requested: set[int] = set()                     # jobs the person asked to stop (checked at every progress report)
         self._store_lock = threading.Lock()                           # pictures and "learn more" both add quiz questions: one at a time
         self._resume: list[tuple[int, str | None]] = []               # background jobs of the last run, queued again at start
 
@@ -69,6 +74,13 @@ class Worker:
     def submit(self, job_id: int, background: bool = False, lane: str | None = None) -> None:
         """lane "deeper": the "learn more" lane; otherwise background says the lane for pictures and replay, or the main one."""
         (self.dp_q if lane == "deeper" else self.bg_q if background else self.q).put(job_id)
+
+    def request_cancel(self, job_id: int) -> None:
+        """Ask a running job to stop: it stops at its next progress report (within seconds; a single long AI request finishes first)."""
+        self._cancel_requested.add(job_id)
+
+    def _is_cancelled(self, job_id: int) -> bool:
+        return job_id in self._cancel_requested
 
     def queue_length(self) -> int:
         """Jobs of the main lane (waiting and running): what a person waiting for notes is behind."""
@@ -110,6 +122,12 @@ class Worker:
         t0 = time.time()
         try:
             result = self._execute(info)
+            if self._is_cancelled(job_id):                  # the person pressed Cancel just as it was finishing: Cancel wins
+                raise JobCancelled()
+        except JobCancelled:
+            logger.info("job %s (%s) cancelled", job_id, info["kind"])
+            self._cancelled(info)
+            return
         except LectureKitError as e:           # an expected problem: stored with its code and a readable message
             code, message = job_error(e.code, str(e))
             logger.warning("job %s (%s) failed: %s: %s", job_id, info["kind"], e.code, e)
@@ -120,6 +138,8 @@ class Worker:
         else:
             self._succeed(info, result)
             logger.info("job %s (%s) done in %.1f s", job_id, info["kind"], time.time() - t0)
+        finally:
+            self._cancel_requested.discard(job_id)
 
     def _claim(self, job_id: int) -> dict | None:
         """Mark the job processing and collect everything lecturekit needs as plain values."""
@@ -246,6 +266,8 @@ class Worker:
         last = {"t": 0.0, "stage": None}
 
         def cb(stage: str, percent: int, message: str = "") -> None:
+            if job_id in self._cancel_requested:
+                raise JobCancelled()
             now = time.time()
             if stage == last["stage"] and now - last["t"] < PROGRESS_EVERY:
                 return
@@ -419,6 +441,34 @@ class Worker:
                             answer_index=int(q["answer_index"]), bloom_level=q.get("bloom_level", ""),
                             explanation=q.get("explanation", "")))
         session.state, session.config = "done", result["config"]
+
+    @staticmethod
+    def reset_extra(session: LectureSession, kind: str) -> None:
+        """After a cancelled extra job: the lecture and its notes are untouched, the extra can be made again."""
+        if kind == "visuals":
+            session.visuals_state = "skipped"
+        elif kind == "replay":
+            session.replay_state = "none"
+        elif kind == "deeper":
+            session.deeper_state = "none"
+
+    def _cancelled(self, info: dict) -> None:
+        """The person pressed Cancel. Notes in the making: the lecture and its recording are deleted. An extra (pictures, replay, learn more): only it stops."""
+        kind = info["kind"]
+        with self.sf() as db:
+            job = db.get(Job, info["job_id"])
+            session = db.get(LectureSession, info["session_id"])
+            if job is not None:
+                job.state, job.finished_at, job.stage = "cancelled", utcnow(), "cancelled"       # kept (not counted against the daily limit)
+            if session is not None:
+                if kind in ("process", "finish"):
+                    db.delete(session)
+                else:
+                    self.reset_extra(session, kind)
+            db.commit()
+        if kind in ("process", "finish"):
+            storage.remove_tree(storage.session_dir(self.settings, info["user_id"], info["session_id"]))
+        sync(self.hub, info["user_id"], "cancelled", info["session_id"])
 
     def _fail(self, info: dict, code: str, message: str) -> None:
         with self.sf() as db:

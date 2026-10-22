@@ -120,7 +120,7 @@ class Job(Base):
     session_id: Mapped[int | None] = _fk("session.id", null=True, on_delete="SET NULL")
     user_id: Mapped[int] = _fk("user.id")
     kind: Mapped[str] = mapped_column(String(8))                       # process | chunk | finish | visuals | replay
-    state: Mapped[str] = mapped_column(String(10), default="queued")   # queued processing done failed
+    state: Mapped[str] = mapped_column(String(10), default="queued")   # queued processing done failed cancelled
     stage: Mapped[str] = mapped_column(String(16), default="queued")
     percent: Mapped[int] = mapped_column(Integer, default=0)
     message: Mapped[str] = mapped_column(Text, default="")

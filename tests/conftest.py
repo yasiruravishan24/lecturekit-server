@@ -75,7 +75,10 @@ class FakeLK:
             for stage, pct, msg in self.stages:
                 if on_progress:
                     on_progress(stage, pct, msg)
-            self.gate.wait(10)
+            end = time.time() + 10
+            while not self.gate.wait(0.05) and time.time() < end:        # a long step: like the real speech to text, it reports all the time
+                if on_progress:
+                    on_progress("transcribe", 12, "still listening")
             if self.fail_with:
                 raise self.fail_with
             return fake_result(out_dir, "C" if slides else "A")

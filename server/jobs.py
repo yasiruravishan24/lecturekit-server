@@ -11,11 +11,11 @@ from .models import Job, LectureSession, User, utcnow
 
 
 def check_daily_limit(db: Session, user: User, limit: int) -> None:
-    """Counts `process` and `finish` jobs created in the last 24 hours (chunk jobs are free). A job lost to a server restart is not the
-    person's doing, so it is not counted."""
+    """Counts `process` and `finish` jobs created in the last 24 hours (chunk jobs are free). A job lost to a server restart, or one the person cancelled, is not
+    counted."""
     since = utcnow() - timedelta(hours=24)
     used = db.scalar(select(func.count(Job.id)).where(
-        Job.user_id == user.id, Job.kind.in_(("process", "finish")), Job.created_at >= since,
+        Job.user_id == user.id, Job.kind.in_(("process", "finish")), Job.created_at >= since, Job.state != "cancelled",
         or_(Job.error_code.is_(None), Job.error_code != "server_restarted"))) or 0
     if used >= limit:
         raise ApiError(429, "daily_limit", f"Daily limit reached ({limit} lectures); try again tomorrow")
